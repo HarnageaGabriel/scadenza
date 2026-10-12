@@ -1,0 +1,250 @@
+[
+	{
+		"id": "12809115180",
+		"tbs_sha256": "a7781bc044f9e19ba8009c0299b404f3816642d5185ed73bae6c05e8f7fa9d35",
+		"cert_sha256": "4973b48cf244e4981d43ff0485c347d50a22f0b827f9d0c96f9233a9e7646bf5",
+		"dns_names": [
+			"example.com",
+			"example.edu",
+			"example.net",
+			"example.org"
+		],
+		"pubkey_sha256": "54d18757bf715a84566fb9722785e9f78109c2a1e66a2c63ab2c57d94f41b627",
+		"issuer": {
+			"friendly_name": "Sectigo",
+			"pubkey_sha256": "2aa918617e4b60060fed719e9aacdbb4f3c803cc7b052fc16ce21c0177f78f69",
+			"name": "C=GB, O=Sectigo Limited, CN=Sectigo Public Server Authentication CA OV R36"
+		},
+		"not_before": "2025-11-20T00:00:00Z",
+		"not_after": "2026-11-20T23:59:59Z",
+		"revoked": true
+	},
+	{
+		"id": "12822827438",
+		"tbs_sha256": "cc93628df568482176fc494c75cfbea1979a75693520a0c402b94de00cee7157",
+		"cert_sha256": "04d54ae0d1b89c0477a054e9bf5823ec3fc4876884edd1700137bcc4b0d9da2a",
+		"dns_names": [
+			"example.com",
+			"example.edu",
+			"example.net",
+			"example.org",
+			"www.example.com",
+			"www.example.edu",
+			"www.example.net",
+			"www.example.org"
+		],
+		"pubkey_sha256": "23b67836046639f99ccf16d7b808dc26883d11bf7fb3faf4422b333456c7b650",
+		"issuer": {
+			"friendly_name": "Sectigo",
+			"pubkey_sha256": "2aa918617e4b60060fed719e9aacdbb4f3c803cc7b052fc16ce21c0177f78f69",
+			"name": "C=GB, O=Sectigo Limited, CN=Sectigo Public Server Authentication CA OV R36"
+		},
+		"not_before": "2025-11-21T00:00:00Z",
+		"not_after": "2026-11-21T23:59:59Z",
+		"revoked": false
+	},
+	{
+		"id": "12937142056",
+		"tbs_sha256": "b46167cd8eda2b77f501c846f3acc36f8fbbd484ea518d60ed04d88fba89e7ec",
+		"cert_sha256": "a42a79d123e9de1dfa6cfcb054454dbac0405997ebc05054a4d11a5d7a33952d",
+		"dns_names": [
+			"example.com",
+			"example.edu",
+			"example.net",
+			"example.org",
+			"www.example.com",
+			"www.example.edu",
+			"www.example.net",
+			"www.example.org"
+		],
+		"pubkey_sha256": "8f9e63a1a27bee87614840a43c9f2bb40e94322fc08e98e51d22ac33f3d3f7b6",
+		"issuer": {
+			"friendly_name": "Sectigo",
+			"pubkey_sha256": "2aa918617e4b60060fed719e9aacdbb4f3c803cc7b052fc16ce21c0177f78f69",
+			"name": "C=GB, O=Sectigo Limited, CN=Sectigo Public Server Authentication CA OV R36"
+		},
+		"not_before": "2025-12-02T00:00:00Z",
+		"not_after": "2026-12-02T23:59:59Z",
+		"revoked": false
+	},
+	{
+		"id": "16163998675",
+		"tbs_sha256": "3db3b9d75d4c3a7e3745b0be64928117dfc114495c97183ae9f7fd88aa39d659",
+		"cert_sha256": "909ad25a39dd261ef1f2624345d4da43aaa600c7860f1390a85d5007e9e24215",
+		"dns_names": [
+			"*.example.com",
+			"example.com"
+		],
+		"pubkey_sha256": "ce7aebcbef71d6906aad1a55ef41fdaa2387575a318ba80f1a77eca280816639",
+		"issuer": {
+			"friendly_name": "SSL.com",
+			"pubkey_sha256": "c7c8980b720999527393107ab7a8806f5ea8bbda381a5479f704af4666c4a050",
+			"name": "C=US, O=SSL Corporation, CN=Cloudflare TLS Issuing RSA CA 3"
+		},
+		"not_before": "2026-07-29T21:52:13Z",
+		"not_after": "2026-10-27T22:00:51Z",
+		"revoked": false
+	},
+	{
+		"id": "16164002413",
+		"tbs_sha256": "bc940559a255d6e20e8462917d1218d99aee4718d73b5fc37c2e4815461a4ade",
+		"cert_sha256": "895496491a655a443ae987921ec4b4ece11ee74c69509cbbc2fbc1e53832e8b7",
+		"dns_names": [
+			"*.example.com",
+			"example.com"
+		],
+		"pubkey_sha256": "794e22fc46a3bf73c1798b9a178f30e8a307162f98dd4c8937fd8344ca44e472",
+		"issuer": {
+			"friendly_name": "SSL.com",
+			"pubkey_sha256": "e38be21734c2fa1fcbfb7387460e11b39bf8f80729cc766f23d4e77b64433469",
+			"name": "C=US, O=SSL Corporation, CN=Cloudflare TLS Issuing ECC CA 3"
+		},
+		"not_before": "2026-07-29T21:52:31Z",
+		"not_after": "2026-10-27T22:00:51Z",
+		"revoked": false
+	},
+	{
+		"id": "16164248667",
+		"tbs_sha256": "8614a8e7f9f104fbd400756ff005e34bdfdd2e9c9d04f127961fbb1c8a0b775b",
+		"cert_sha256": "cf065087d4ce1f934bb08381600807f8c4d64e5572217615088ef613f31575fc",
+		"dns_names": [
+			"*.example.com",
+			"example.com"
+		],
+		"pubkey_sha256": "9fbbc9b185ed8939d39125c59773d089f2a8531f77085e0015175177991822d9",
+		"issuer": {
+			"friendly_name": "SSL.com",
+			"pubkey_sha256": "c7c8980b720999527393107ab7a8806f5ea8bbda381a5479f704af4666c4a050",
+			"name": "C=US, O=SSL Corporation, CN=Cloudflare TLS Issuing RSA CA 3"
+		},
+		"not_before": "2026-07-29T22:09:26Z",
+		"not_after": "2026-10-27T22:17:20Z",
+		"revoked": false
+	},
+	{
+		"id": "16164256171",
+		"tbs_sha256": "4032202c159c07091500877198a0b2cbd0afb2218f15c2d46089b5e6f4abab43",
+		"cert_sha256": "6153a96fd1a6ab7f4d438fc34932484299d0729d9140b3a126bb2f9c07b02200",
+		"dns_names": [
+			"*.example.com",
+			"example.com"
+		],
+		"pubkey_sha256": "0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b",
+		"issuer": {
+			"friendly_name": "SSL.com",
+			"pubkey_sha256": "e38be21734c2fa1fcbfb7387460e11b39bf8f80729cc766f23d4e77b64433469",
+			"name": "C=US, O=SSL Corporation, CN=Cloudflare TLS Issuing ECC CA 3"
+		},
+		"not_before": "2026-07-29T22:10:08Z",
+		"not_after": "2026-10-27T22:17:21Z",
+		"revoked": false
+	},
+	{
+		"id": "17232708246",
+		"tbs_sha256": "93758dd59e719e7d2223e3e35710933905c0ccd6e982d509277587c67225de33",
+		"cert_sha256": "4ee441f6946d02e1971d1a40177a1982105f4299046c4338a9bb16f5fa1ce192",
+		"dns_names": [
+			"*.example.com",
+			"example.com"
+		],
+		"pubkey_sha256": "48613e13ccf2a48c01e2d4c4fd9abdc0cc9550a1f65d7beddfe9de083487a0ae",
+		"issuer": {
+			"friendly_name": "Sectigo",
+			"pubkey_sha256": "6bd9212ce649c659c9cabc6cb60fcffac7a20c29be61fdceb2b5f2168701688d",
+			"name": "C=GB, O=Sectigo Limited, CN=Sectigo Public Server Authentication CA DV R36"
+		},
+		"not_before": "2026-09-17T00:00:00Z",
+		"not_after": "2026-12-13T21:47:42Z",
+		"revoked": false
+	},
+	{
+		"id": "17383412688",
+		"tbs_sha256": "b93c1387b02153407254914e0ee4cf75eb9289dbec681d8f3d10dcc2a62ecf9f",
+		"cert_sha256": "56a7acf53c6fb22f50afb016b1b0fb59a9fe2b3524b1aa869f36d8e7ddb0eaad",
+		"dns_names": [
+			"*.example.com",
+			"example.com"
+		],
+		"pubkey_sha256": "3caa35764bdb43a495e342657678d763385b3574f6b8ec80df76c3332bcc6c54",
+		"issuer": {
+			"friendly_name": "Sectigo",
+			"pubkey_sha256": "6526a0bc3ce396d2e47b05c406e0f1233a56fdda55c3526ebef99dd21864cdd6",
+			"name": "C=GB, O=Sectigo Limited, CN=Sectigo Public Server Authentication CA DV E36"
+		},
+		"not_before": "2026-09-24T00:00:00Z",
+		"not_after": "2026-12-21T09:32:54Z",
+		"revoked": false
+	},
+	{
+		"id": "17433287100",
+		"tbs_sha256": "045a5fd4447d634f703e23c849d4378922d9900c1b81c9ab9e7b1bfc591ebbd8",
+		"cert_sha256": "4ec2d2ad14563fec16af62c6e1959fe7351b6559962d82c87de8eff5dee8d665",
+		"dns_names": [
+			"*.example.com",
+			"example.com"
+		],
+		"pubkey_sha256": "3116c9c532757d78e27df3dd3360f3486c5bf005aec2693a1705b89497b754a2",
+		"issuer": {
+			"friendly_name": "SSL.com",
+			"pubkey_sha256": "c7c8980b720999527393107ab7a8806f5ea8bbda381a5479f704af4666c4a050",
+			"name": "C=US, O=SSL Corporation, CN=Cloudflare TLS Issuing RSA CA 3"
+		},
+		"not_before": "2026-09-26T22:34:35Z",
+		"not_after": "2026-12-25T22:43:19Z",
+		"revoked": false
+	},
+	{
+		"id": "17433287993",
+		"tbs_sha256": "0f905e37b1a2d01f90318748d4710081ef3e1d4f9a32f5c7194bdee903b36051",
+		"cert_sha256": "70793dedec9999ca2d9604bcc18bad0211f722ef4c5b89c92596d39f41980f24",
+		"dns_names": [
+			"*.example.com",
+			"example.com"
+		],
+		"pubkey_sha256": "63dc72f0c7a9e81ad4af595cf4ae80de574fa6afe5e23c6319495adb55a1ddf2",
+		"issuer": {
+			"friendly_name": "SSL.com",
+			"pubkey_sha256": "e38be21734c2fa1fcbfb7387460e11b39bf8f80729cc766f23d4e77b64433469",
+			"name": "C=US, O=SSL Corporation, CN=Cloudflare TLS Issuing ECC CA 3"
+		},
+		"not_before": "2026-09-26T22:34:50Z",
+		"not_after": "2026-12-25T22:43:20Z",
+		"revoked": false
+	},
+	{
+		"id": "17433445379",
+		"tbs_sha256": "7246022e2707053067023b506ec25cf0eabab088d96027a40599f6295daa0794",
+		"cert_sha256": "8355fddfbed74907fff8ad99b4844c3f3a4644261e6f339a12f9f38d56b19502",
+		"dns_names": [
+			"*.example.com",
+			"example.com"
+		],
+		"pubkey_sha256": "62335ae384f2f7490a1801bafffda96e59eeaba42b051ed0f671bac4dbb3909e",
+		"issuer": {
+			"friendly_name": "SSL.com",
+			"pubkey_sha256": "c7c8980b720999527393107ab7a8806f5ea8bbda381a5479f704af4666c4a050",
+			"name": "C=US, O=SSL Corporation, CN=Cloudflare TLS Issuing RSA CA 3"
+		},
+		"not_before": "2026-09-26T22:48:57Z",
+		"not_after": "2026-12-25T22:56:35Z",
+		"revoked": false
+	},
+	{
+		"id": "17433446883",
+		"tbs_sha256": "6ecee9752dd17d6ab36befdda1a90849a5c9227e6a7806621ac8ef42cd621d9c",
+		"cert_sha256": "85ca6ab068e9bcce88b6c4aa3c47f7d17228134a457f870d3800e6223a0df07a",
+		"dns_names": [
+			"*.example.com",
+			"example.com"
+		],
+		"pubkey_sha256": "b68c8c1a989386ea15693ca0bba41e09c9ee9b63ca2649e718eb076a51fb0735",
+		"issuer": {
+			"friendly_name": "SSL.com",
+			"pubkey_sha256": "e38be21734c2fa1fcbfb7387460e11b39bf8f80729cc766f23d4e77b64433469",
+			"name": "C=US, O=SSL Corporation, CN=Cloudflare TLS Issuing ECC CA 3"
+		},
+		"not_before": "2026-09-26T22:49:11Z",
+		"not_after": "2026-12-25T22:56:35Z",
+		"revoked": false
+	}
+]
