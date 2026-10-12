@@ -150,3 +150,123 @@ func FuzzDecodeCrtSH(f *testing.F) {
 	f.Add([]byte("[]"))
 	f.Fuzz(func(_ *testing.T, data []byte) { _, _ = decodeCrtSH(data) })
 }
+
+func certspotterPage(id string, notAfter string) string {
+	return `[{"id":"` + id + `","cert_sha256":"` + id + `","dns_names":["example.com"],"issuer":{"name":"CA"},"not_before":"2026-01-01T00:00:00Z","not_after":"` + notAfter + `","revoked":false}]`
+}
+
+func testClient(slept *[]time.Duration) *httpx.Client {
+	return &httpx.Client{HTTP: http.DefaultClient, MaxAttempts: 1, Sleep: func(_ context.Context, d time.Duration) error {
+		if slept != nil {
+			*slept = append(*slept, d)
+		}
+		return nil
+	}}
+}
+
+func TestCertSpotterPaginationGuards(t *testing.T) {
+	for name, handler := range map[string]http.HandlerFunc{
+		"repeated cursor": func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(certspotterPage("7", "2026-04-01T00:00:00Z")))
+		},
+		"empty cursor": func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(certspotterPage("", "2026-04-01T00:00:00Z")))
+		},
+		"endless": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(certspotterPage(r.URL.Query().Get("after")+"x", "2026-04-01T00:00:00Z")))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(handler)
+			defer server.Close()
+			_, err := (&CertSpotter{Client: testClient(nil), URL: server.URL}).Search(context.Background(), Query{Domain: "example.com"})
+			if Kind(err) != Malformed || err == nil {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCertSpotterLimitCountsFinalizedRecords(t *testing.T) {
+	// Pages 1 and 2 hold only expired/duplicate records; the limit must not stop before a live one.
+	pages := map[string]string{
+		"":  certspotterPage("1", "2026-01-15T00:00:00Z"),
+		"1": certspotterPage("1", "2026-01-15T00:00:00Z"),
+		"2": certspotterPage("3", "2026-06-01T00:00:00Z"),
+		"3": "[]",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(pages[r.URL.Query().Get("after")]))
+	}))
+	defer server.Close()
+	pages["1"] = `[{"id":"2","cert_sha256":"1","dns_names":["example.com"],"issuer":{"name":"CA"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-01-15T00:00:00Z","revoked":false}]`
+	now := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	result, err := (&CertSpotter{Client: testClient(nil), URL: server.URL}).Search(context.Background(), Query{Domain: "example.com", Limit: 1, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final, _ := Finalize(result, now, false, 0)
+	if len(final) != 1 || final[0].Fingerprint != "3" {
+		t.Fatalf("final = %#v", final)
+	}
+}
+
+func TestCertSpotterRateLimitBoundedRetry(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Retry-After", "86400")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	var slept []time.Duration
+	_, err := (&CertSpotter{Client: testClient(&slept), URL: server.URL}).Search(context.Background(), Query{Domain: "example.com"})
+	if Kind(err) != RateLimited || requests != 2 || len(slept) != 1 || slept[0] != httpx.MaxRetryAfter {
+		t.Fatalf("err=%v requests=%d slept=%v", err, requests, slept)
+	}
+}
+
+func TestFinalizeVerdictBoundary(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	hundred := 100 * 24 * time.Hour
+	for _, test := range []struct {
+		name     string
+		lifetime time.Duration
+		days     int
+		verdict  string
+	}{
+		{"exactly 100d", hundred, 100, "ok"},
+		{"100d+1s", hundred + time.Second, 100, "exceeds"},
+		{"100d-1s", hundred - time.Second, 99, "ok"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, _ := Finalize([]Certificate{{Fingerprint: "a", NotBefore: start, NotAfter: start.Add(test.lifetime)}}, start, true, 0)
+			if got[0].LifetimeDays != test.days || got[0].Verdict100D != test.verdict {
+				t.Fatalf("got %d %s", got[0].LifetimeDays, got[0].Verdict100D)
+			}
+		})
+	}
+}
+
+func TestFinalizeTotalOrder(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	a := Certificate{DedupKey: "1:A", Issuer: "CA", Serial: "A", SubjectNames: []string{"a.example"}, NotBefore: start, NotAfter: end}
+	b := Certificate{DedupKey: "1:B", Issuer: "CA", Serial: "B", SubjectNames: []string{"b.example"}, NotBefore: start, NotAfter: end}
+	c := Certificate{DedupKey: "2:A", Issuer: "CA", Serial: "A", SubjectNames: []string{"a.example"}, NotBefore: start, NotAfter: end}
+	for _, input := range [][]Certificate{{a, b, c}, {c, b, a}, {b, a, c}} {
+		got, _ := Finalize(input, start, true, 0)
+		if got[0].DedupKey != "1:A" || got[1].DedupKey != "1:B" || got[2].DedupKey != "2:A" {
+			t.Fatalf("order = %s %s %s", got[0].DedupKey, got[1].DedupKey, got[2].DedupKey)
+		}
+	}
+}
+
+func TestDecodersRejectInvertedValidity(t *testing.T) {
+	if _, err := decodeCertSpotter([]byte(certspotterPage("1", "2025-01-01T00:00:00Z"))); err == nil {
+		t.Error("Cert Spotter accepted not_after before not_before")
+	}
+	if _, err := decodeCrtSH([]byte(`[{"issuer_ca_id":1,"issuer_name":"CA","common_name":"a","name_value":"a","not_before":"2026-01-01T00:00:00","not_after":"2025-01-01T00:00:00","serial_number":"A"}]`)); err == nil {
+		t.Error("crt.sh accepted not_after before not_before")
+	}
+}

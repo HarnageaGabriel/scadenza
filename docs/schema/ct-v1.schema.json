@@ -34,7 +34,16 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["code", "slug", "severity", "summary", "explanation", "remediation"]
+        "additionalProperties": false,
+        "required": ["code", "slug", "severity", "summary", "explanation", "remediation"],
+        "properties": {
+          "code": {"type": "string", "pattern": "^SCD-[0-9]{4}$"},
+          "slug": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["error", "warning", "info"]},
+          "summary": {"type": "string", "minLength": 1},
+          "explanation": {"type": "string", "minLength": 1},
+          "remediation": {"type": "string", "minLength": 1}
+        }
       }
     }
   }

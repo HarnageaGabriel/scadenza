@@ -18,10 +18,14 @@ Options:
 
 Set `SCADENZA_CERTSPOTTER_KEY` to an optional Cert Spotter API key. It is sent only as a Bearer authorization header and is never accepted as a flag or printed.
 
-Results are sorted by `not_before` descending and then SHA-256 fingerprint. Subject names are lowercased, deduplicated, and sorted. CSV joins names with one space; the table shows three names followed by `+N more`. JSON follows [`scadenza.ct/v1`](../schema/ct-v1.schema.json).
+Results are sorted by `not_before` descending, then fingerprint, dedup key, issuer, serial, and joined names (a total order, so output is deterministic). Subject names are lowercased, deduplicated, and sorted. CSV joins names with one space; the table shows three names followed by `+N more`. JSON follows [`scadenza.ct/v1`](../schema/ct-v1.schema.json).
 
-`lifetime_days` is the integer number of complete 24-hour periods between `not_before` and `not_after` (fractional periods are discarded). `verdict_100d` is `ok` at 100 days or less and `exceeds` above 100 days. This is a pure lifetime check against the maximum validity for certificates issued on or after 2027-03-15; it does not decide trust or renewal readiness.
+`lifetime_days` is the integer number of complete 24-hour periods between `not_before` and `not_after` (fractional periods are discarded). `verdict_100d` is computed from the exact, unrounded validity duration: `ok` when it is at most 100*24h and `exceeds` when strictly greater (100d+1s exceeds). So the floored `lifetime_days` is display only; for example 100d+1s shows `100` but is `exceeds`. This is a pure lifetime check against the maximum validity for certificates issued on or after 2027-03-15; it does not decide trust or renewal readiness.
 
 Cert Spotter entries deduplicate by `cert_sha256`. Because crt.sh JSON supplies no certificate SHA-256, crt.sh entries deduplicate by `(issuer_ca_id, serial_number)` and keep `fingerprint_sha256` empty. VERIFY: precertificate/final-certificate correlation is intentionally outside M1 and needs confirmation against CT specifications.
+
+CSV output prefixes a single quote to any text cell that begins with `=`, `+`, `-`, `@`, tab, or carriage return to prevent spreadsheet formula injection. JSON and table output are unchanged.
+
+Cert Spotter pagination requires a non-empty cursor that advances on every page and stops after 1000 pages (SCD-0004 otherwise). On HTTP 429 the Retry-After delay (seconds or HTTP-date, clamped to 30s) is honored for one retry, then the source is reported rate-limited (SCD-0003) and fallback applies. Redirects to a different scheme or host are refused. A record whose `not_after` precedes `not_before` fails the source response as malformed (SCD-0004).
 
 Failures and fallback warnings are written to stderr. When every selected source fails, the command exits 4. Invalid domains or flags exit 2.

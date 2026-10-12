@@ -12,7 +12,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/HarnageaGabriel/scadenza/internal/clock"
 )
+
+// MaxRetryAfter is the longest server-requested delay honored.
+const MaxRetryAfter = 30 * time.Second
+
+const maxRedirects = 10
 
 // MaxBodyBytes is the largest accepted response body.
 const MaxBodyBytes int64 = 32 << 20
@@ -32,7 +39,32 @@ type Client struct {
 	UserAgent   string
 	Limiter     Waiter
 	Sleep       Sleeper
+	Clock       clock.Clock
 	MaxAttempts int
+}
+
+// CheckRedirect refuses redirects that change scheme or host and strips Authorization.
+func CheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return errors.New("too many redirects")
+	}
+	origin := via[0].URL
+	if req.URL.Scheme != origin.Scheme || req.URL.Host != origin.Host {
+		return fmt.Errorf("refusing redirect to different origin %s://%s", req.URL.Scheme, req.URL.Host)
+	}
+	req.Header.Del("Authorization")
+	return nil
+}
+
+// RetryDelay returns the clamped Retry-After delay, using the client clock for HTTP dates.
+func (c *Client) RetryDelay(header http.Header) time.Duration {
+	var now time.Time
+	if c.Clock != nil {
+		now = c.Clock.Now()
+	} else {
+		now = clock.System{}.Now()
+	}
+	return RetryAfter(header, now)
 }
 
 // New returns a client with verified TLS and explicit timeouts.
@@ -44,7 +76,7 @@ func New(version string, limiter Waiter) *Client {
 		ResponseHeaderTimeout: 20 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
-	return &Client{HTTP: &http.Client{Transport: transport, Timeout: 45 * time.Second}, UserAgent: "scadenza/" + version + " (+https://github.com/HarnageaGabriel/scadenza)", Limiter: limiter, Sleep: sleep, MaxAttempts: 3}
+	return &Client{HTTP: &http.Client{Transport: transport, Timeout: 45 * time.Second, CheckRedirect: CheckRedirect}, UserAgent: "scadenza/" + version + " (+https://github.com/HarnageaGabriel/scadenza)", Limiter: limiter, Sleep: sleep, MaxAttempts: 3}
 }
 
 // Do sends a request and returns a bounded response body.
@@ -76,7 +108,11 @@ func (c *Client) Do(ctx context.Context, request *http.Request) (int, http.Heade
 		if !retryable(response.StatusCode) || attempt == attempts-1 {
 			return response.StatusCode, response.Header, body, nil
 		}
-		if err := c.Sleep(ctx, time.Duration(1<<attempt)*200*time.Millisecond); err != nil {
+		delay := time.Duration(1<<attempt) * 200 * time.Millisecond
+		if retryAfter := c.RetryDelay(response.Header); retryAfter > 0 {
+			delay = retryAfter
+		}
+		if err := c.Sleep(ctx, delay); err != nil {
 			return 0, nil, nil, err
 		}
 	}
@@ -136,11 +172,31 @@ func (l *IntervalLimiter) Wait(ctx context.Context) error {
 	}
 }
 
-// RetryAfter parses a delta-seconds Retry-After value.
-func RetryAfter(header http.Header) time.Duration {
-	seconds, err := strconv.Atoi(strings.TrimSpace(header.Get("Retry-After")))
-	if err != nil || seconds < 0 {
+// RetryAfter parses a delta-seconds or HTTP-date Retry-After value, clamped to MaxRetryAfter.
+func RetryAfter(header http.Header, now time.Time) time.Duration {
+	value := strings.TrimSpace(header.Get("Retry-After"))
+	if value == "" {
 		return 0
 	}
-	return time.Duration(seconds) * time.Second
+	var delay time.Duration
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if seconds < 0 {
+			return 0
+		}
+		if seconds > int64(MaxRetryAfter/time.Second) {
+			return MaxRetryAfter
+		}
+		delay = time.Duration(seconds) * time.Second
+	} else if when, err := http.ParseTime(value); err == nil {
+		delay = when.Sub(now)
+	} else {
+		return 0
+	}
+	if delay < 0 {
+		return 0
+	}
+	if delay > MaxRetryAfter {
+		return MaxRetryAfter
+	}
+	return delay
 }

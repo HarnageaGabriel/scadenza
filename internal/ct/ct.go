@@ -34,6 +34,8 @@ type Query struct {
 	Domain            string
 	IncludeSubdomains bool
 	Limit             int
+	Now               time.Time
+	IncludeExpired    bool
 }
 
 // Source searches one CT backend.
@@ -102,7 +104,7 @@ func Finalize(certificates []Certificate, now time.Time, includeExpired bool, ma
 	for _, certificate := range certificates {
 		certificate.SubjectNames = uniqueSorted(certificate.SubjectNames)
 		certificate.LifetimeDays = int(certificate.NotAfter.Sub(certificate.NotBefore) / (24 * time.Hour))
-		if certificate.LifetimeDays <= 100 {
+		if certificate.NotAfter.Sub(certificate.NotBefore) <= 100*24*time.Hour {
 			certificate.Verdict100D = "ok"
 		} else {
 			certificate.Verdict100D = "exceeds"
@@ -120,17 +122,27 @@ func Finalize(certificates []Certificate, now time.Time, includeExpired bool, ma
 		seen[key] = true
 		result = append(result, certificate)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if !result[i].NotBefore.Equal(result[j].NotBefore) {
-			return result[i].NotBefore.After(result[j].NotBefore)
-		}
-		return result[i].Fingerprint < result[j].Fingerprint
-	})
+	sort.SliceStable(result, func(i, j int) bool { return less(result[i], result[j]) })
 	truncated := maximum > 0 && len(result) > maximum
 	if truncated {
 		result = result[:maximum]
 	}
 	return result, truncated
+}
+
+// less is a total order: not_before descending, then fingerprint, dedup key, issuer, serial, names.
+func less(a, b Certificate) bool {
+	if !a.NotBefore.Equal(b.NotBefore) {
+		return a.NotBefore.After(b.NotBefore)
+	}
+	left := [...]string{a.Fingerprint, a.DedupKey, a.Issuer, a.Serial, strings.Join(a.SubjectNames, "\n")}
+	right := [...]string{b.Fingerprint, b.DedupKey, b.Issuer, b.Serial, strings.Join(b.SubjectNames, "\n")}
+	for index := range left {
+		if left[index] != right[index] {
+			return left[index] < right[index]
+		}
+	}
+	return false
 }
 
 func uniqueSorted(values []string) []string {

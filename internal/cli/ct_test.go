@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -92,3 +94,29 @@ func testCTDependencies(certURL, crtURL string) ctDependencies {
 	return ctDependencies{clock: clock.Fixed{Time: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)}, sources: map[string]ct.Source{"certspotter": &ct.CertSpotter{Client: client(), URL: certURL}, "crtsh": &ct.CrtSH{Client: client(), URL: crtURL}}}
 }
 func normalizeLines(value string) string { return strings.ReplaceAll(value, "\r\n", "\n") }
+
+func TestExitCodeClassification(t *testing.T) {
+	if got := exitCode(errors.New("plain")); got != ExitInternalError {
+		t.Fatalf("untyped error exit = %d", got)
+	}
+	if got := exitCode(fmt.Errorf("wrapped: %w", &commandError{code: ExitUsageError})); got != ExitUsageError {
+		t.Fatalf("typed error exit = %d", got)
+	}
+	for _, args := range [][]string{{"ct"}, {"ct", "a", "b"}, {"ct", "example.com", "--bogus"}, {"nosuch"}, {"version", "extra"}} {
+		var stdout, stderr bytes.Buffer
+		if code := execute(args, &stdout, &stderr, testCTDependencies("x", "x")); code != ExitUsageError {
+			t.Errorf("args=%v code=%d", args, code)
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := execute([]string{"ct", "example.com", "--format", "csv"}, &stdout, &stderr, ctDependencies{clock: clock.Fixed{}, sources: map[string]ct.Source{"certspotter": failingSource{}, "crtsh": failingSource{}}}); code != ExitSourceUnavailable {
+		t.Errorf("source failure code=%d", code)
+	}
+}
+
+type failingSource struct{}
+
+func (failingSource) Name() string { return "certspotter" }
+func (failingSource) Search(context.Context, ct.Query) ([]ct.Certificate, error) {
+	return nil, errors.New("down")
+}

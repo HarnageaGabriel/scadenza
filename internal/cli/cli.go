@@ -31,6 +31,9 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 func execute(args []string, stdout, stderr io.Writer, dependencies ctDependencies) int {
 	root := newRootCommand(stdout, stderr, dependencies)
 	root.SetArgs(args)
+	if _, _, err := root.Find(args); err != nil {
+		return ExitUsageError
+	}
 	if err := root.Execute(); err != nil {
 		return exitCode(err)
 	}
@@ -46,6 +49,7 @@ func newRootCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return &commandError{code: ExitUsageError, err: err} })
 	root.AddCommand(newVersionCommand(stdout))
 	root.AddCommand(newCTCommand(stdout, stderr, dependencies))
 	return root
@@ -56,7 +60,7 @@ func newVersionCommand(stdout io.Writer) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "version",
 		Short: "Print build version information",
-		Args:  cobra.NoArgs,
+		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			info := version.Current()
 			if asJSON {

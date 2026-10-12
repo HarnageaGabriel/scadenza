@@ -24,15 +24,51 @@ type CertSpotter struct {
 // Name returns the stable source identifier.
 func (s *CertSpotter) Name() string { return "certspotter" }
 
+// MaxPages bounds Cert Spotter pagination.
+const MaxPages = 1000
+
 // Search returns normalized Cert Spotter issuances.
 func (s *CertSpotter) Search(ctx context.Context, query Query) ([]Certificate, error) {
 	var result []Certificate
 	after := ""
-	for {
-		parameters := url.Values{"domain": {query.Domain}, "include_subdomains": {strconv.FormatBool(query.IncludeSubdomains)}, "match_wildcards": {"true"}, "expand": {"dns_names", "issuer"}}
-		if after != "" {
-			parameters.Set("after", after)
+	for pages := 0; ; pages++ {
+		if pages >= MaxPages {
+			return nil, malformed(s.Name(), errors.New("page limit exceeded"))
 		}
+		body, err := s.fetch(ctx, query, after)
+		if err != nil {
+			return nil, err
+		}
+		page, err := decodeCertSpotter(body)
+		if err != nil {
+			return nil, malformed(s.Name(), err)
+		}
+		if len(page) == 0 {
+			return result, nil
+		}
+		next := page[len(page)-1].DedupKey
+		if next == "" || next == after {
+			return nil, malformed(s.Name(), errors.New("pagination cursor missing or not advancing"))
+		}
+		after = next
+		result = append(result, page...)
+		if query.Limit > 0 {
+			if kept, _ := Finalize(result, query.Now, query.IncludeExpired, 0); len(kept) >= query.Limit {
+				return result, nil
+			}
+		}
+	}
+}
+
+// maxRateLimitRetries is the number of bounded retries after a 429.
+const maxRateLimitRetries = 1
+
+func (s *CertSpotter) fetch(ctx context.Context, query Query, after string) ([]byte, error) {
+	parameters := url.Values{"domain": {query.Domain}, "include_subdomains": {strconv.FormatBool(query.IncludeSubdomains)}, "match_wildcards": {"true"}, "expand": {"dns_names", "issuer"}}
+	if after != "" {
+		parameters.Set("after", after)
+	}
+	for retry := 0; ; retry++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint(s.URL, parameters), nil)
 		if err != nil {
 			return nil, malformed(s.Name(), err)
@@ -47,28 +83,19 @@ func (s *CertSpotter) Search(ctx context.Context, query Query) ([]Certificate, e
 			}
 			return nil, unavailable(s.Name(), err)
 		}
-		if status == http.StatusTooManyRequests || bytesContainRateLimited(body) {
-			if delay := httpx.RetryAfter(headers); delay > 0 {
-				if err := s.Client.Sleep(ctx, delay); err != nil {
-					return nil, unavailable(s.Name(), err)
-				}
+		if status != http.StatusTooManyRequests && !bytesContainRateLimited(body) {
+			if status < 200 || status >= 300 {
+				return nil, unavailable(s.Name(), fmt.Errorf("HTTP status %d", status))
 			}
+			return body, nil
+		}
+		if retry >= maxRateLimitRetries {
 			return nil, &SourceError{Kind: RateLimited, Source: s.Name(), Err: errors.New("request quota reached")}
 		}
-		if status < 200 || status >= 300 {
-			return nil, unavailable(s.Name(), fmt.Errorf("HTTP status %d", status))
-		}
-		page, err := decodeCertSpotter(body)
-		if err != nil {
-			return nil, malformed(s.Name(), err)
-		}
-		if len(page) == 0 {
-			return result, nil
-		}
-		result = append(result, page...)
-		after = page[len(page)-1].DedupKey
-		if query.Limit > 0 && len(result) >= query.Limit {
-			return result, nil
+		if delay := s.Client.RetryDelay(headers); delay > 0 {
+			if err := s.Client.Sleep(ctx, delay); err != nil {
+				return nil, unavailable(s.Name(), err)
+			}
 		}
 	}
 }
@@ -100,6 +127,9 @@ func decodeCertSpotter(data []byte) ([]Certificate, error) {
 		notAfter, err := time.Parse(time.RFC3339, record.NotAfter)
 		if err != nil {
 			return nil, fmt.Errorf("not_after: %w", err)
+		}
+		if notAfter.Before(notBefore) {
+			return nil, errors.New("not_after precedes not_before")
 		}
 		issuer := record.Issuer.Name
 		if record.Issuer.FriendlyName != "" && record.Issuer.FriendlyName != issuer {

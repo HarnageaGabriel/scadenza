@@ -21,9 +21,28 @@ type ctDependencies struct {
 	clock   clock.Clock
 	sources map[string]ct.Source
 }
-type commandError struct{ code int }
+type commandError struct {
+	code int
+	err  error
+}
 
-func (e *commandError) Error() string { return "command failed" }
+func (e *commandError) Error() string {
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return "command failed"
+}
+func (e *commandError) Unwrap() error { return e.err }
+
+// usageArgs wraps a cobra argument validator so its failures exit as usage errors.
+func usageArgs(validate cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(command *cobra.Command, args []string) error {
+		if err := validate(command, args); err != nil {
+			return &commandError{code: ExitUsageError, err: err}
+		}
+		return nil
+	}
+}
 
 func productionCTDependencies() ctDependencies {
 	certClient := httpx.New(version.Version, httpx.NewIntervalLimiter(time.Second))
@@ -40,7 +59,7 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 	var format string
 	var maximum int
 	command := &cobra.Command{
-		Use: "ct <domain>", Short: "List certificates issued for a domain", Args: cobra.ExactArgs(1),
+		Use: "ct <domain>", Short: "List certificates issued for a domain", Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(command *cobra.Command, args []string) error {
 			domain, err := ct.NormalizeDomain(args[0])
 			if err != nil {
@@ -68,7 +87,7 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 			var used []string
 			diagnostics := []diag.Diagnostic{}
 			for index, source := range chosen {
-				certificates, err = source.Search(command.Context(), ct.Query{Domain: domain, IncludeSubdomains: includeSubdomains, Limit: maximum + 1})
+				certificates, err = source.Search(command.Context(), ct.Query{Domain: domain, IncludeSubdomains: includeSubdomains, Limit: maximum + 1, Now: dependencies.clock.Now(), IncludeExpired: expired})
 				if err == nil {
 					used = []string{source.Name()}
 					break
@@ -141,5 +160,5 @@ func exitCode(err error) int {
 	if errors.As(err, &commandErr) {
 		return commandErr.code
 	}
-	return ExitUsageError
+	return ExitInternalError
 }

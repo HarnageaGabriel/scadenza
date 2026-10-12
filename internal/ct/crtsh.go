@@ -76,6 +76,9 @@ func decodeCrtSH(data []byte) ([]Certificate, error) {
 		if err != nil {
 			return nil, fmt.Errorf("not_after: %w", err)
 		}
+		if notAfter.Before(notBefore) {
+			return nil, errors.New("not_after precedes not_before")
+		}
 		names := strings.Split(record.NameValue, "\n")
 		if record.CommonName != "" {
 			names = append(names, record.CommonName)

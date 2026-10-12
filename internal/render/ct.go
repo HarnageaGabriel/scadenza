@@ -50,12 +50,20 @@ func writeCSV(writer io.Writer, certificates []ct.Certificate) error {
 		if certificate.Revoked != nil {
 			revoked = fmt.Sprint(*certificate.Revoked)
 		}
-		if err := output.Write([]string{certificate.Fingerprint, certificate.Serial, strings.Join(certificate.SubjectNames, " "), certificate.Issuer, certificate.NotBefore.Format(time.RFC3339), certificate.NotAfter.Format(time.RFC3339), fmt.Sprint(certificate.LifetimeDays), certificate.Verdict100D, revoked, certificate.Source}); err != nil {
+		if err := output.Write([]string{csvSafe(certificate.Fingerprint), csvSafe(certificate.Serial), csvSafe(strings.Join(certificate.SubjectNames, " ")), csvSafe(certificate.Issuer), certificate.NotBefore.Format(time.RFC3339), certificate.NotAfter.Format(time.RFC3339), fmt.Sprint(certificate.LifetimeDays), certificate.Verdict100D, revoked, csvSafe(certificate.Source)}); err != nil {
 			return err
 		}
 	}
 	output.Flush()
 	return output.Error()
+}
+
+// csvSafe neutralizes spreadsheet formula injection by prefixing a single quote.
+func csvSafe(value string) string {
+	if value != "" && strings.ContainsRune("=+-@	", rune(value[0])) {
+		return "'" + value
+	}
+	return value
 }
 
 func writeTable(writer io.Writer, certificates []ct.Certificate) error {
