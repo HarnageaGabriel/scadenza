@@ -1,0 +1,53 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - depguard
+    - errcheck
+    - errorlint
+    - forbidigo
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+  settings:
+    depguard:
+      rules:
+        diagnostic-purity:
+          list-mode: lax
+          files:
+            - "**/internal/diag/**/*.go"
+            - "!$test"
+          deny:
+            - pkg: "net/http$"
+              desc: "Diagnostics must not perform network I/O."
+            - pkg: "os$"
+              desc: "Diagnostics must not perform process or filesystem I/O."
+            - pkg: "os/exec$"
+              desc: "Diagnostics must not execute processes."
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^time\.Now$'
+          msg: "Inject internal/clock.Clock."
+  exclusions:
+    rules:
+      - path: 'internal[\\/]clock[\\/]'
+        linters:
+          - forbidigo
+      - path: _test\.go
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofumpt
