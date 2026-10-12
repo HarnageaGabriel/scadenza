@@ -7,13 +7,11 @@ Which of your public TLS certificates will not survive 100-day lifetimes?
 Status: pre-alpha, study phase. See [docs/research/01-study.md](docs/research/01-study.md).
 
 ## Prova subito
-The M0 skeleton currently exposes version metadata only.
-Run `go run ./cmd/scadenza version --json` from a source checkout.
-
-## Try it now (planned)
 
 ```sh
 scadenza ct example.com
 ```
+
+From a source checkout, use `go run ./cmd/scadenza ct example.com`. The command needs no configuration; use `--format json` or `--format csv` for machine-readable output.
 
 Licence: Apache-2.0.

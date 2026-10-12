@@ -30,3 +30,15 @@ codes:
     summary: No Certificate Transparency results found
     explanation: The Certificate Transparency source returned no certificate records for the requested domain.
     remediation: Check the domain spelling or query another Certificate Transparency source.
+  - code: SCD-0006
+    slug: ct-results-truncated
+    severity: warning
+    summary: Certificate Transparency results were truncated
+    explanation: More matching certificate records were available than the configured result limit permits.
+    remediation: Increase --max-results when a complete result set is required.
+  - code: SCD-0007
+    slug: ct-source-fell-back
+    severity: warning
+    summary: Certificate Transparency source fallback used
+    explanation: A preferred Certificate Transparency source failed, so scadenza queried the next selected source.
+    remediation: Review the preceding source diagnostic or retry the preferred source later.

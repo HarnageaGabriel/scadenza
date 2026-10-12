@@ -1,0 +1,26 @@
+[
+  {
+    "issuer_ca_id": 100,
+    "issuer_name": "C=US, O=Example CA, CN=Example RSA",
+    "common_name": "example.com",
+    "name_value": "example.com\nwww.example.com",
+    "id": 2001,
+    "entry_timestamp": "2026-01-02T03:04:05",
+    "not_before": "2026-01-01T00:00:00",
+    "not_after": "2026-04-01T00:00:00",
+    "serial_number": "01AB",
+    "result_count": 2
+  },
+  {
+    "issuer_ca_id": 101,
+    "issuer_name": "C=US, O=Other CA, CN=Other ECC",
+    "common_name": "api.example.com",
+    "name_value": "api.example.com",
+    "id": 2002,
+    "entry_timestamp": "2026-02-02T03:04:05",
+    "not_before": "2026-02-01T00:00:00",
+    "not_after": "2026-06-01T00:00:00",
+    "serial_number": "02CD",
+    "result_count": 1
+  }
+]

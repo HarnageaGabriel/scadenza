@@ -1,0 +1,2 @@
+NOT BEFORE  NOT AFTER   DAYS  100D  FINGERPRINT SHA256                                                SERIAL  REVOKED  ISSUER                        NAMES                                                   SOURCE
+2026-01-01  2026-04-02  91    ok    ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff          false    CN=Example Root (Example CA)  api.example.com, example.com, mail.example.com +1 more  certspotter

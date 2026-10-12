@@ -25,15 +25,19 @@ const (
 
 // Execute runs the CLI and converts command errors to documented exit codes.
 func Execute(args []string, stdout, stderr io.Writer) int {
-	root := newRootCommand(stdout, stderr)
+	return execute(args, stdout, stderr, productionCTDependencies())
+}
+
+func execute(args []string, stdout, stderr io.Writer, dependencies ctDependencies) int {
+	root := newRootCommand(stdout, stderr, dependencies)
 	root.SetArgs(args)
 	if err := root.Execute(); err != nil {
-		return ExitUsageError
+		return exitCode(err)
 	}
 	return ExitOK
 }
 
-func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
+func newRootCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "scadenza",
 		Short:         "Inspect public TLS certificate readiness",
@@ -43,6 +47,7 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	root.AddCommand(newVersionCommand(stdout))
+	root.AddCommand(newCTCommand(stdout, stderr, dependencies))
 	return root
 }
 

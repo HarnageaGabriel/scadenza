@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/HarnageaGabriel/scadenza/docs/schema/ct-v1.schema.json",
+  "title": "scadenza Certificate Transparency output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "domain", "generated_at", "sources_used", "certificates", "diagnostics"],
+  "properties": {
+    "schema_version": {"const": "scadenza.ct/v1"},
+    "domain": {"type": "string"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "sources_used": {"type": "array", "items": {"enum": ["certspotter", "crtsh"]}},
+    "certificates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fingerprint_sha256", "serial", "subject_names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "revoked", "source"],
+        "properties": {
+          "fingerprint_sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
+          "serial": {"type": "string"},
+          "subject_names": {"type": "array", "items": {"type": "string"}},
+          "issuer": {"type": "string"},
+          "not_before": {"type": "string", "format": "date-time"},
+          "not_after": {"type": "string", "format": "date-time"},
+          "lifetime_days": {"type": "integer", "minimum": 0},
+          "verdict_100d": {"enum": ["ok", "exceeds"]},
+          "revoked": {"type": ["boolean", "null"]},
+          "source": {"enum": ["certspotter", "crtsh"]}
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "slug", "severity", "summary", "explanation", "remediation"]
+      }
+    }
+  }
+}

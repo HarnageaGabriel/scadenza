@@ -7,3 +7,5 @@ Generated from `internal/diag/registry.yaml`. Do not edit by hand.
 - [SCD-0003 — Certificate Transparency source rate limit reached](SCD-0003.md)
 - [SCD-0004 — Certificate Transparency response is malformed](SCD-0004.md)
 - [SCD-0005 — No Certificate Transparency results found](SCD-0005.md)
+- [SCD-0006 — Certificate Transparency results were truncated](SCD-0006.md)
+- [SCD-0007 — Certificate Transparency source fallback used](SCD-0007.md)

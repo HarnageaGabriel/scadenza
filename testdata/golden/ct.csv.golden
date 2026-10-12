@@ -1,0 +1,2 @@
+fingerprint_sha256,serial,subject_names,issuer,not_before,not_after,lifetime_days,verdict_100d,revoked,source
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,,api.example.com example.com mail.example.com www.example.com,CN=Example Root (Example CA),2026-01-01T00:00:00Z,2026-04-02T00:00:00Z,91,ok,false,certspotter
