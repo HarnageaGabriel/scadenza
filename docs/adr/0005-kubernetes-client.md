@@ -66,3 +66,28 @@ scadenza's build to an upstream module whose API may change between releases.
   and TLS Secrets are still reported.
 - The Kubernetes source stays read-only, and the e2e cluster grants only the
   documented verbs, so any accidental write would fail loudly in CI.
+
+## Addendum: M5a Secret access default
+
+ADR 0006 decision 8 changes the Secret path before the M3 behavior ships. The
+default `scan --kube` now uses client-go's metadata client and
+`PartialObjectMetadata` to observe TLS Secret names, namespaces, labels, and
+annotations without receiving `data`. Certificate facts come from cert-manager
+`Certificate` spec/status and have no fingerprint. They remain unresolved
+unless exactly one CT or live certificate has the same complete normalized name
+set and exact `notAfter`, in which case the weak correlation is recorded as
+`names_and_expiry`.
+
+The original typed Secret list is retained only behind `--kube-secrets` (or
+`kube.secrets: true`). That opt-in emits `SCD-0028`, reads `tls.crt`, and keeps
+the immediate `tls.key` removal described above. The default RBAC manifest no
+longer grants any Secret access; a separate opt-in manifest grants Secret
+`list`/`get` cluster-wide and documents a per-namespace Role alternative.
+
+Kubernetes authorization treats collection GET as `list`, and the official
+authorization documentation warns that `get`, `list`, and `watch` can return
+full resource details and are equivalent for access to returned data. RBAC
+therefore cannot distinguish a `PartialObjectMetadata` list from a full Secret
+list. A default service account without a Secrets rule receives 403 for the
+metadata request; scadenza reports `SCD-0015` and continues with its other
+Kubernetes reads.

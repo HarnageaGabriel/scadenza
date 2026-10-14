@@ -14,6 +14,7 @@ fromCT: false
 port: 8443
 kube:
   enabled: true
+  secrets: true
   context: kind-scadenza
   namespaces: [payments]
   ownershipFile: owners.yaml
@@ -34,7 +35,7 @@ func TestParseValidDocument(t *testing.T) {
 	if config.FromCT == nil || *config.FromCT || config.Port == nil || *config.Port != 8443 {
 		t.Fatalf("pointers = %+v", config)
 	}
-	if !config.Kube.Enabled || config.Kube.Context != "kind-scadenza" || len(config.Kube.Namespaces) != 1 {
+	if !config.Kube.Enabled || !config.Kube.Secrets || config.Kube.Context != "kind-scadenza" || len(config.Kube.Namespaces) != 1 {
 		t.Fatalf("kube = %+v", config.Kube)
 	}
 	if !config.Policy.Strict || config.Policy.MinCoverage == nil || *config.Policy.MinCoverage != 80 {

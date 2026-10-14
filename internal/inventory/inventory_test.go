@@ -168,6 +168,66 @@ func TestCorrelateDiffCategories(t *testing.T) {
 	}
 }
 
+func TestCorrelateKubeNamesAndExpiry(t *testing.T) {
+	names := []string{"api.example.com", "www.example.com"}
+	notAfter := date(2, time.April)
+	kubeRecord := kube.Certificate{
+		DedupKey: "cert-manager/payments/api",
+		Names:    names,
+		NotAfter: notAfter,
+		Observations: []kube.Observation{{
+			Source:   kube.SourceCertManager,
+			Location: "payments/api",
+		}},
+	}
+	ctOne := ct.Certificate{
+		SubjectNames: names,
+		NotAfter:     notAfter,
+		Source:       "certspotter",
+		DedupKey:     "one",
+	}
+	ctTwo := ct.Certificate{
+		SubjectNames: names,
+		NotAfter:     notAfter,
+		Source:       "crtsh",
+		DedupKey:     "two",
+	}
+
+	t.Run("exactly one CT match joins", func(t *testing.T) {
+		certificates, _ := Correlate(Input{CT: []ct.Certificate{ctOne}, Kube: []kube.Certificate{kubeRecord}, Now: date(1, time.February)})
+		if len(certificates) != 1 {
+			t.Fatalf("certificates = %+v", certificates)
+		}
+		if certificates[0].CorrelationMethod != CorrelationNamesExpiry {
+			t.Fatalf("correlation_method = %q, want %q", certificates[0].CorrelationMethod, CorrelationNamesExpiry)
+		}
+		if len(certificates[0].Observations) != 2 {
+			t.Fatalf("observations = %+v", certificates[0].Observations)
+		}
+	})
+
+	t.Run("ambiguous CT matches stay separate", func(t *testing.T) {
+		certificates, _ := Correlate(Input{CT: []ct.Certificate{ctOne, ctTwo}, Kube: []kube.Certificate{kubeRecord}, Now: date(1, time.February)})
+		if len(certificates) != 3 {
+			t.Fatalf("certificates = %+v", certificates)
+		}
+		for _, certificate := range certificates {
+			if certificate.CorrelationMethod == CorrelationNamesExpiry {
+				t.Fatalf("ambiguous record was weakly joined: %+v", certificate)
+			}
+		}
+	})
+
+	t.Run("different expiry stays separate", func(t *testing.T) {
+		other := kubeRecord
+		other.NotAfter = date(3, time.April)
+		certificates, _ := Correlate(Input{CT: []ct.Certificate{ctOne}, Kube: []kube.Certificate{other}, Now: date(1, time.February)})
+		if len(certificates) != 2 {
+			t.Fatalf("certificates = %+v", certificates)
+		}
+	})
+}
+
 func TestCorrelatePublicAndLifetime(t *testing.T) {
 	now := date(1, time.February)
 	certificates, _ := Correlate(Input{
@@ -390,6 +450,37 @@ func TestCorrelateKubernetesCorrelatesWithCTAndLive(t *testing.T) {
 		t.Fatalf("verdict=%q public=%v", certificate.Verdict100D, certificate.Public)
 	}
 	if len(findings) != 1 || findings[0].Kind != KindMatched {
+		t.Fatalf("findings = %+v", findings)
+	}
+}
+
+func TestCorrelateMetadataOnlySecretIsReported(t *testing.T) {
+	certificates, findings := Correlate(Input{
+		Kube: []kube.Certificate{{
+			DedupKey: "secret-metadata/payments/db-tls",
+			Observations: []kube.Observation{{
+				Source:   kube.SourceSecretMetadata,
+				Location: "payments/db-tls",
+				Detail:   "kubernetes.io/tls Secret metadata; certificate data not read",
+			}},
+			Owners: []owner.Owner{{Value: "team-pay", Source: owner.SourceLabel, Location: "payments/db-tls"}},
+		}},
+		Now: date(1, time.February),
+	})
+	if len(certificates) != 1 {
+		t.Fatalf("certificates = %+v", certificates)
+	}
+	certificate := certificates[0]
+	if certificate.CorrelationMethod != CorrelationUnresolved {
+		t.Fatalf("correlation_method = %q, want %q", certificate.CorrelationMethod, CorrelationUnresolved)
+	}
+	if len(certificate.Observations) != 1 || certificate.Observations[0].Source != kube.SourceSecretMetadata {
+		t.Fatalf("observations = %+v", certificate.Observations)
+	}
+	if len(certificate.Owners) != 1 || certificate.Owners[0].Value != "team-pay" {
+		t.Fatalf("owners = %+v", certificate.Owners)
+	}
+	if len(findings) != 1 || findings[0].Kind != KindKubeOnly {
 		t.Fatalf("findings = %+v", findings)
 	}
 }

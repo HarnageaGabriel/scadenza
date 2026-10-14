@@ -10,7 +10,8 @@ the answer is auditable.
 An owner value is read from, in this order:
 
 - `label` - a label key listed in the ownership file, read from the Secret or
-  Certificate object.
+  Certificate object. The default Kubernetes scan obtains Secret labels through
+  `PartialObjectMetadata`; it does not read Secret data.
 - `annotation` - the same keys, read from the object's annotations.
 - `namespace-label` / `namespace-annotation` - the same keys, read from the
   namespace that holds the object. A namespace annotation is always reported as
@@ -74,6 +75,10 @@ certificate is reported with `owner: team-pay`,
 `owner_source: namespace-label`, `location: namespace/payments`, and a second
 entry for the object label. Both sources are recorded; scadenza does not
 silently pick one.
+
+This result does not require `--kube-secrets`: Secret metadata and namespace
+metadata contain every signal used above. The opt-in affects certificate bytes
+and fingerprint correlation, not label or annotation ownership.
 
 ## Diagnostics
 

@@ -46,7 +46,8 @@ scadenza can observe, so its health is `unknown`; the risk
 - A `kubernetes.io/tls` Secret carrying the
   `cert-manager.io/certificate-name` annotation is `automatic` and `configured`
   even when the `Certificate` resource was not read (for example a missing CRD).
-  The annotation is already read for ownership; renewal reuses it.
+  The annotation is available from `PartialObjectMetadata`; renewal reuses it
+  without requiring `--kube-secrets` or reading Secret data.
 
 ### Unknown
 
@@ -152,7 +153,8 @@ official post before they are relied on. The public ACME directory hosts and the
 CA/B backdating allowance carry the same `VERIFY` markers in the code.
 
 scadenza reads only fields it already reads from the cluster: `spec.duration`,
-`spec.renewBefore`, `status.notAfter`, `status.renewalTime`, the `Ready`
-condition, the issuer type and ACME server, and the Secret annotation. It does
-not read `spec.renewBeforePercentage`, so an explicit `spec.renewBefore` is
-treated as fixed.
+`spec.renewBefore`, `spec.dnsNames`, `status.notBefore`, `status.notAfter`,
+`status.renewalTime`, the `Ready` condition, the issuer type and ACME server,
+and the Secret annotation from metadata. It does not read
+`spec.renewBeforePercentage`, so an explicit `spec.renewBefore` is treated as
+fixed.

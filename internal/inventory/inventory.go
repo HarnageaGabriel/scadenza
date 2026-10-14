@@ -47,6 +47,9 @@ const (
 	CorrelationSHA256 = "sha256"
 	// CorrelationIssuerSerial means the entry was matched by issuer and serial.
 	CorrelationIssuerSerial = "issuer_serial"
+	// CorrelationNamesExpiry means a Kubernetes status observation was weakly
+	// joined to exactly one CT or live certificate by equal names and notAfter.
+	CorrelationNamesExpiry = "names_and_expiry"
 	// CorrelationUnresolved means nothing could correlate the record.
 	CorrelationUnresolved = "unresolved"
 )
@@ -86,8 +89,9 @@ type Certificate struct {
 	NotAfter     time.Time `json:"not_after"`
 	LifetimeDays int       `json:"lifetime_days"`
 	Verdict100D  string    `json:"verdict_100d"`
-	// CorrelationMethod is sha256, issuer_serial, or unresolved: the weakest
-	// piece of evidence that placed this certificate in the inventory.
+	// CorrelationMethod is sha256, issuer_serial, names_and_expiry, or
+	// unresolved: the weakest piece of evidence that placed this certificate in
+	// the inventory.
 	CorrelationMethod string `json:"correlation_method"`
 	// Policy is the dated validity assessment; verdict_100d stays unchanged.
 	Policy       policy.Assessment `json:"policy"`
@@ -263,54 +267,87 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 	kubeRecords := append([]kube.Certificate(nil), in.Kube...)
 	sort.SliceStable(kubeRecords, func(i, j int) bool { return lessKube(kubeRecords[i], kubeRecords[j]) })
 	for _, record := range kubeRecords {
-		key := "kube:" + record.DedupKey
 		if record.Fingerprint != "" {
-			key = "fp:" + record.Fingerprint
+			continue
 		}
+		// Only a record that carries certificate facts can be weakly joined by
+		// name set and expiry. Records without them, such as a TLS Secret seen
+		// through metadata only, are still reported with their owner signals.
+		if !record.NotAfter.IsZero() && len(record.Names) > 0 {
+			matches := []string{}
+			for key, entry := range accumulated {
+				if (!entry.hasCT && !entry.hasLive) ||
+					entry.certificate.NotAfter.IsZero() ||
+					!entry.certificate.NotAfter.Equal(record.NotAfter) ||
+					!sameNameSet(entry.names, kubeNameSet(record.Names)) {
+					continue
+				}
+				matches = append(matches, key)
+			}
+			if len(matches) == 1 {
+				entry := accumulated[matches[0]]
+				entry.method = CorrelationNamesExpiry
+				addKubeRecord(entry, record)
+				continue
+			}
+		}
+		entry := ensure(accumulated, &order, "kube:"+record.DedupKey, "")
+		entry.setMethod(CorrelationUnresolved)
+		addKubeRecord(entry, record)
+	}
+	for _, record := range kubeRecords {
+		if record.Fingerprint == "" {
+			continue
+		}
+		key := "fp:" + record.Fingerprint
 		entry := ensure(accumulated, &order, key, record.Fingerprint)
-		if record.Fingerprint != "" {
-			entry.setMethod(CorrelationSHA256)
-		} else {
-			entry.setMethod(CorrelationUnresolved)
-		}
-		entry.hasKube = true
-		for _, name := range record.Names {
-			if normalized := normalizeName(name); normalized != "" {
-				entry.names[normalized] = true
-			}
-		}
-		if entry.certificate.Issuer == "" {
-			entry.certificate.Issuer = record.Issuer
-		}
-		if entry.certificate.Serial == "" {
-			entry.certificate.Serial = normalizeSerial(record.Serial)
-		}
-		if !record.NotBefore.IsZero() && (entry.certificate.NotBefore.IsZero() || entry.certificate.NotBefore.After(record.NotBefore)) {
-			entry.certificate.NotBefore = record.NotBefore
-		}
-		if !record.NotAfter.IsZero() && (entry.certificate.NotAfter.IsZero() || entry.certificate.NotAfter.After(record.NotAfter)) {
-			entry.certificate.NotAfter = record.NotAfter
-		}
-		if record.Public != nil {
-			entry.trustChecked = true
-			if *record.Public {
-				entry.kubePublic = true
-				entry.anyTrusted = true
-			}
-		}
-		for _, declared := range record.Owners {
-			entry.owners[ownerKey(declared)] = declared
-		}
-		for _, observation := range record.Observations {
-			entry.observations[observation.Source+"|"+observation.Location] = Observation{
-				Source:     observation.Source,
-				Location:   observation.Location,
-				Detail:     observation.Detail,
-				Kubernetes: observation.Kubernetes,
-			}
-		}
+		entry.setMethod(CorrelationSHA256)
+		addKubeRecord(entry, record)
 	}
 
+	return finishCorrelation(accumulated, order, in, now)
+}
+
+func addKubeRecord(entry *accumulator, record kube.Certificate) {
+	entry.hasKube = true
+	for _, name := range record.Names {
+		if normalized := normalizeName(name); normalized != "" {
+			entry.names[normalized] = true
+		}
+	}
+	if entry.certificate.Issuer == "" {
+		entry.certificate.Issuer = record.Issuer
+	}
+	if entry.certificate.Serial == "" {
+		entry.certificate.Serial = normalizeSerial(record.Serial)
+	}
+	if !record.NotBefore.IsZero() && (entry.certificate.NotBefore.IsZero() || entry.certificate.NotBefore.After(record.NotBefore)) {
+		entry.certificate.NotBefore = record.NotBefore
+	}
+	if !record.NotAfter.IsZero() && (entry.certificate.NotAfter.IsZero() || entry.certificate.NotAfter.After(record.NotAfter)) {
+		entry.certificate.NotAfter = record.NotAfter
+	}
+	if record.Public != nil {
+		entry.trustChecked = true
+		if *record.Public {
+			entry.kubePublic = true
+			entry.anyTrusted = true
+		}
+	}
+	for _, declared := range record.Owners {
+		entry.owners[ownerKey(declared)] = declared
+	}
+	for _, observation := range record.Observations {
+		entry.observations[observation.Source+"|"+observation.Location] = Observation{
+			Source:     observation.Source,
+			Location:   observation.Location,
+			Detail:     observation.Detail,
+			Kubernetes: observation.Kubernetes,
+		}
+	}
+}
+
+func finishCorrelation(accumulated map[string]*accumulator, order []string, in Input, now time.Time) ([]Certificate, []Finding) {
 	states := in.stateLookup()
 	result := make([]Certificate, 0, len(order))
 	findings := make([]Finding, 0, len(order))
@@ -487,12 +524,37 @@ func (a *accumulator) setMethod(method string) {
 func correlationRank(method string) int {
 	switch method {
 	case CorrelationSHA256:
-		return 2
+		return 3
 	case CorrelationIssuerSerial:
+		return 2
+	case CorrelationNamesExpiry:
 		return 1
 	default:
 		return 0
 	}
+}
+
+func kubeNameSet(names []string) map[string]bool {
+	result := map[string]bool{}
+	for _, name := range names {
+		if normalized := normalizeName(name); normalized != "" {
+			result[normalized] = true
+		}
+	}
+	return result
+}
+
+func sameNameSet(left, right map[string]bool) bool {
+	if len(left) == 0 || len(left) != len(right) {
+		return false
+	}
+	for name := range left {
+		normalized := normalizeName(name)
+		if normalized == "" || !right[normalized] {
+			return false
+		}
+	}
+	return true
 }
 
 func validLifetime(notBefore, notAfter time.Time) bool {

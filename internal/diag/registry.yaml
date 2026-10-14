@@ -89,7 +89,7 @@ codes:
     severity: warning
     summary: Kubernetes read access was forbidden
     explanation: Kubernetes RBAC refused a read. Structured fields name the resource kind, namespace, HTTP status, and StatusReason. This is a partial failure when another requested resource kind was read successfully.
-    remediation: Grant the documented read-only ClusterRole with list/get on secrets, certificates, issuers, clusterissuers, and namespaces.
+    remediation: Grant the default read-only ClusterRole for certificates, issuers, clusterissuers, and namespaces. Grant Secret list/get only when metadata or certificate data reads are explicitly intended.
   - code: SCD-0016
     slug: secret-without-certificate
     severity: warning
@@ -162,3 +162,9 @@ codes:
     summary: Manual renewal falls after the next CA/B step
     explanation: An operator declared a domain as manually renewed in scadenza.yaml, and the certificate's notAfter falls after the next CA/B maximum validity step, so the manual renewal workload grows.
     remediation: Move the certificate to an automatic renewal mechanism, or plan the additional manual renewals per year.
+  - code: SCD-0028
+    slug: kube-secret-data-read
+    severity: info
+    summary: Kubernetes Secret data reads are enabled
+    explanation: The --kube-secrets flag or kube.secrets configuration enables full kubernetes.io/tls Secret reads so scadenza can parse tls.crt and compute fingerprints. Secret private keys are dropped immediately and are never retained. The diagnostic detail identifies every namespace whose Secret data may be read.
+    remediation: Remove --kube-secrets or set kube.secrets to false when Secret metadata and cert-manager status are sufficient.
