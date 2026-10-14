@@ -217,7 +217,7 @@ and expiry calendars for private PKI.
 
 ## Contributing
 
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) (commits
+Contributions are welcome. Looking for a place to start? See the [good first issues](https://github.com/HarnageaGabriel/scadenza/labels/good%20first%20issue) and the [help wanted](https://github.com/HarnageaGabriel/scadenza/labels/help%20wanted) ones. Read [CONTRIBUTING.md](CONTRIBUTING.md) (commits
 need a DCO sign-off) and [CONVENTIONS.md](CONVENTIONS.md). Report security
 issues privately as described in [SECURITY.md](SECURITY.md). This project
 follows the [Code of Conduct](CODE_OF_CONDUCT.md).
