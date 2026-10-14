@@ -58,6 +58,10 @@ policy:
   minCoverage: 0
 ```
 
+Relative `hostsFile` and `kube.ownershipFile` paths are resolved against the
+directory containing the configuration file, not the process working directory.
+Absolute paths are used unchanged.
+
 ## Precedence
 
 Command-line flags always win over the file. A value is taken from the file only
@@ -73,7 +77,7 @@ only read from the file.
 ## Validation
 
 Decoding is strict. An unreadable file, an unknown key, a missing or wrong
-`version` (must be `1`), an out-of-range `port` or `minCoverage`, an unknown
-`policy.failOn` kind, a `renewal` value other than `manual`, or `none` combined
-with another kind is a usage error (exit 2). Unknown keys and bad values are reported as `SCD-0022`; a bad
+`version` (must be `1`), an out-of-range `port` or `minCoverage`, an empty or
+unknown `policy.failOn` list, a `renewal` value other than `manual`, or `none`
+combined with another kind is a usage error (exit 2). Unknown keys and bad values are reported as `SCD-0022`; a bad
 `failOn` kind is reported as `SCD-0021`.

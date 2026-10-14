@@ -23,7 +23,8 @@ When more than one condition holds, the highest-priority code wins. The order is
   reported rather than a verdict.
 - **3 before 5.** A blocking finding keeps the pre-0.1.0 meaning of exit 3 for
   CI. `--strict` and `--min-coverage` only decide the exit code when nothing
-  else is wrong; they never hide a finding.
+  else is wrong; they never hide a finding. When exit 4 or exit 3 wins, the incomplete
+condition is still emitted as warning-severity `SCD-0020`.
 - **5 before 0.** An otherwise clean scan that did not check everything it was
   asked to check still exits non-zero.
 

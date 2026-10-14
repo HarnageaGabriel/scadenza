@@ -165,9 +165,16 @@ func sourceErrorCode(err error) string {
 }
 
 func emitDiagnostic(writer io.Writer, code, detail string) {
+	emitDiagnosticSeverity(writer, code, detail, "")
+}
+
+func emitDiagnosticSeverity(writer io.Writer, code, detail string, severity diag.Severity) {
 	item, ok := diag.Lookup(code)
 	if !ok {
 		return
+	}
+	if severity != "" {
+		item.Severity = severity
 	}
 	suffix := ""
 	if strings.TrimSpace(detail) != "" {

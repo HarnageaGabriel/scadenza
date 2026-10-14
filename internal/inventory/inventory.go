@@ -360,7 +360,8 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 				Detail:      "validity exceeds 100 days; renewal must fit the 100-day limit",
 			})
 		}
-		if validLifetime(certificate.NotBefore, certificate.NotAfter) && !certificate.Policy.CompliantAtIssuance {
+		if validLifetime(certificate.NotBefore, certificate.NotAfter) && !certificate.NotAfter.Before(now) &&
+			!certificate.Policy.CompliantAtIssuance {
 			findings = append(findings, Finding{
 				Kind:        KindNotCompliantAtIssuance,
 				Fingerprint: certificate.Fingerprint,

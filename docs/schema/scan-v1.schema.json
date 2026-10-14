@@ -211,7 +211,7 @@
             "properties": {
               "name": {"type": "string", "minLength": 1},
               "status": {"enum": ["ok", "partial", "failed", "not_requested"]},
-              "detail": {"type": "string"}
+              "detail": {"type": "string", "minLength": 1}
             }
           }
         },

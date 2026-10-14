@@ -15,6 +15,11 @@ func TestLimitsAreDated(t *testing.T) {
 		instant string
 		want    Limits
 	}{
+		{"pre-2018", "2017-06-01T00:00:00Z", Limits{1186, 398}},
+		{"last second before 2018 step", "2018-02-28T23:59:59Z", Limits{1186, 398}},
+		{"2018 step", "2018-03-01T00:00:00Z", Limits{825, 398}},
+		{"last second before 2020 step", "2020-08-31T23:59:59Z", Limits{825, 398}},
+		{"2020 step", "2020-09-01T00:00:00Z", Limits{398, 398}},
 		{"pre-2026", "2025-06-01T00:00:00Z", Limits{398, 398}},
 		{"just before 2026 step", "2026-03-14T23:59:59Z", Limits{398, 398}},
 		{"2026 step", "2026-03-15T00:00:00Z", Limits{200, 200}},
@@ -37,6 +42,14 @@ func TestLimitsAreDated(t *testing.T) {
 }
 
 func TestNextStepAfter(t *testing.T) {
+	if effective, limits, ok := NextStepAfter(mustTime(t, "2017-06-01T00:00:00Z")); !ok ||
+		!effective.Equal(time.Date(2018, 3, 1, 0, 0, 0, 0, time.UTC)) || limits.MaxValidityDays != 825 {
+		t.Fatalf("2018 next step = %v %v %v", effective, limits, ok)
+	}
+	if effective, limits, ok := NextStepAfter(mustTime(t, "2019-06-01T00:00:00Z")); !ok ||
+		!effective.Equal(time.Date(2020, 9, 1, 0, 0, 0, 0, time.UTC)) || limits.MaxValidityDays != 398 {
+		t.Fatalf("2020 next step = %v %v %v", effective, limits, ok)
+	}
 	effective, limits, ok := NextStepAfter(mustTime(t, "2026-03-14T23:59:59Z"))
 	if !ok || !effective.Equal(Effective200Days) || limits.MaxValidityDays != 200 {
 		t.Fatalf("next step = %v %v %v", effective, limits, ok)
@@ -53,6 +66,14 @@ func TestAssessBoundaries(t *testing.T) {
 		days      int
 		compliant bool
 	}{
+		{"before 2018 fits 1186", "2017-01-01T00:00:00Z", 1186, true},
+		{"before 2018 exceeds 1186", "2017-01-01T00:00:00Z", 1187, false},
+		{"last day before 2018 fits 1186", "2018-02-28T00:00:00Z", 1186, true},
+		{"2018 step fits 825", "2018-03-01T00:00:00Z", 825, true},
+		{"2018 step rejects 826", "2018-03-01T00:00:00Z", 826, false},
+		{"last day before 2020 fits 825", "2020-08-31T00:00:00Z", 825, true},
+		{"2020 step fits 398", "2020-09-01T00:00:00Z", 398, true},
+		{"2020 step rejects 399", "2020-09-01T00:00:00Z", 399, false},
 		{"pre-2026 fits 398", "2025-01-01T00:00:00Z", 398, true},
 		{"pre-2026 exceeds 398", "2025-01-01T00:00:00Z", 399, false},
 		{"last second before the 2026 step keeps 398", "2026-03-14T23:59:59Z", 398, true},

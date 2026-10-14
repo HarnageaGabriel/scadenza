@@ -342,7 +342,7 @@ func TestScanWildcardAndHostCap(t *testing.T) {
 	if !reasons["wildcard"] || !reasons["host-cap"] {
 		t.Fatalf("unresolved = %v", document.Unresolved)
 	}
-	if byReason["shop.example.com"] != "host-cap" || byReason["api.example.com"] != "" {
+	if byReason["shop.example.com:443"] != "host-cap" || byReason["api.example.com"] != "" {
 		t.Fatalf("capped hosts = %v", document.Unresolved)
 	}
 	if len(document.Findings) == 0 {
@@ -387,7 +387,7 @@ func TestScanMaxHostsKeepsExplicitTargets(t *testing.T) {
 			capped[unresolved.Name] = true
 		}
 	}
-	if len(capped) != 2 || !capped["e.example.com"] || !capped["f.example.com"] {
+	if len(capped) != 2 || !capped["e.example.com:443"] || !capped["f.example.com:443"] {
 		t.Fatalf("host-cap names = %v", document.Unresolved)
 	}
 }

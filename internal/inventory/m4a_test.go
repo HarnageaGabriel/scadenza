@@ -50,6 +50,44 @@ func TestCorrelationMethodStatesStrength(t *testing.T) {
 	}
 }
 
+func TestNotCompliantFindingSkipsExpiredAtEvaluation(t *testing.T) {
+	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		notAfter time.Time
+		want     bool
+	}{
+		{"expired before evaluation", now.Add(-time.Hour), false},
+		{"expires exactly at evaluation", now, true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			notBefore := test.notAfter.Add(-400 * 24 * time.Hour)
+			record := ct.Certificate{
+				Fingerprint:  fingerprint("a"),
+				SubjectNames: []string{"example.com"},
+				NotBefore:    notBefore,
+				NotAfter:     test.notAfter,
+				Source:       "certspotter",
+			}
+			_, findings := Correlate(Input{
+				Domains: []string{"example.com"},
+				CT:      []ct.Certificate{record},
+				Now:     now,
+			})
+			found := false
+			for _, finding := range findings {
+				if finding.Kind == KindNotCompliantAtIssuance {
+					found = true
+				}
+			}
+			if found != test.want {
+				t.Fatalf("not-compliant finding = %v, want %v; findings=%+v", found, test.want, findings)
+			}
+		})
+	}
+}
+
 func TestNewCoverage(t *testing.T) {
 	coverage := NewCoverage(3, 2, 1, 2, []SourceCoverage{{Name: "tls", Status: SourceStatusPartial}})
 	if coverage.Ratio != 0.6667 {

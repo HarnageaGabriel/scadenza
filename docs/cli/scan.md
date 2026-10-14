@@ -45,7 +45,8 @@ derived names are listed in `unresolved` with reason `host-cap` and reported as
 - `--strict` exits 5 (`SCD-0020`) when any source is partial or failed, any probe
   failed, or any item was not checked.
 - `--min-coverage <0-100>` exits 5 (`SCD-0020`) when the coverage ratio is below
-  this percentage.
+  this percentage. With a positive threshold, a target-less scan also fails when
+  a requested source is not `ok`, or when no requested source produced data.
 - `--fail-on k1,k2` selects the finding kinds that cause exit 3. One or more of
   `ct_only`, `live_only`, `exceeds-100d`, `not-compliant-at-issuance`,
   `renew-before-exceeds-lifetime`, `renewal-degraded`,
@@ -148,21 +149,22 @@ exact, unrounded validity duration, as in `scadenza ct`.
 Each certificate carries a `policy` object computed from its `not_before`:
 
 - `max_validity_at_issuance_days` - the maximum validity in force at issuance.
-- `compliant_at_issuance` - whether the exact lifetime fits that maximum. A
-  CA may backdate `not_before` by up to 24 hours, so the most permissive limit
-  in `[not_before, not_before+24h]` is used (VERIFY: the exact BR backdating
-  allowance).
+- `compliant_at_issuance` - whether the exact lifetime fits that maximum.
 - `next_limit_days` and `next_limit_effective` - the next scheduled limit and
   its effective date (empty after the last step).
 - `fits_next_limit` - whether the lifetime also fits the next limit.
 
-The schedule is 398 days before 2026-03-15, then 200, 100, and 47 days from
-2026-03-15, 2027-03-15, and 2029-03-15 (SC-081v3). Domain validation reuse is
-398/200/100/10 days over the same steps. `verdict_100d` stays unchanged for
-compatibility and is a readiness signal, never a compliance verdict.
+Certificate validity follows the BR section 6.3.2 history: 1186 days before
+2018-03-01, 825 days before 2020-09-01, and 398 days before 2026-03-15, then
+200, 100, and 47 days from 2026-03-15, 2027-03-15, and 2029-03-15 (SC-081v3).
+Domain validation reuse is 398 days before 2026-03-15, then 200/100/10 days.
+`verdict_100d` stays unchanged for compatibility and is a readiness signal,
+never a compliance verdict.
 
-A certificate that does not fit the limit in force at issuance also produces a
-`not-compliant-at-issuance` finding, which is in the default failure policy.
+A live certificate that does not fit the limit in force at issuance also
+produces a `not-compliant-at-issuance` finding, which is in the default failure
+policy. A certificate already expired at `--now` is `not_checked` and does not
+produce this blocking finding.
 
 ## Findings
 
@@ -185,7 +187,8 @@ Findings are deterministic and sorted. The kinds are:
 - `exceeds-100d` - the certificate validity exceeds 100 days; emitted in
   addition to the kind above. Reported but not failing by default.
 - `not-compliant-at-issuance` - the lifetime exceeds the maximum validity in
-  force at issuance. Fails by default.
+  force at issuance, for a certificate not already expired at the evaluation
+  instant. Fails by default.
 - `kube_only` - read from Kubernetes and not observed in CT or a live handshake.
 - `renew-before-exceeds-lifetime` - a fixed `spec.renewBefore` is at or beyond
   the issued lifetime. Fails by default.
@@ -212,12 +215,15 @@ is always printed, and the table adds a one-line summary after the findings.
 - `names_not_checked` - names in `unresolved` plus the number of `not_checked`
   findings.
 - `sources` - one entry per source, always, with `status` `ok`, `partial`,
-  `failed`, or `not_requested` and a `detail`.
+  `failed`, or `not_requested` and a non-empty `detail`. A chosen fallback source
+  that an earlier source made unnecessary is `not_requested` with detail
+  `not needed: earlier source answered`; it is neither failed nor partial.
 - `ratio` - `targets_probed / targets_requested` rounded to four decimals, and
   `1.0` when nothing was requested.
 
-The ratio is deliberately about probe coverage, not certificate compliance; it
-never turns a missing check into a pass.
+The ratio is deliberately about probe coverage, not certificate compliance;
+with a positive `--min-coverage`, source health also gates target-less scans so
+the `1.0` empty ratio never turns a missing check into a pass.
 
 ## Exit codes
 
@@ -227,7 +233,8 @@ Transparency or Kubernetes) was requested and every requested one was
 unavailable; a failed TLS probe is a `probe_errors` entry, never exit 4, and
 partial failures are warnings. `3` when a finding of a kind selected by
 `--fail-on` is present. `5` when `--strict` or `--min-coverage` is not met and
-nothing else applies. `2` on usage errors. See
+nothing else applies. When `4` or `3` wins, `SCD-0020` is still emitted as a
+warning so an incomplete scan is not hidden. `2` on usage errors. See
 [exit codes](../exit-codes.md).
 
 ## Output
