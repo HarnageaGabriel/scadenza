@@ -28,9 +28,10 @@ import (
 )
 
 const (
-	kubeContextEnv = "SCADENZA_E2E_KUBE_CONTEXT"
-	namespaceEnv   = "SCADENZA_E2E_NAMESPACE"
-	ownerValue     = "team-e2e"
+	kubeContextEnv        = "SCADENZA_E2E_KUBE_CONTEXT"
+	secretsKubeContextEnv = "SCADENZA_E2E_SECRETS_KUBE_CONTEXT"
+	namespaceEnv          = "SCADENZA_E2E_NAMESPACE"
+	ownerValue            = "team-e2e"
 )
 
 type observation struct {
@@ -49,10 +50,11 @@ type observation struct {
 type scanDocument struct {
 	SourcesUsed  []string `json:"sources_used"`
 	Certificates []struct {
-		Fingerprint  string `json:"fingerprint_sha256"`
-		LifetimeDays int    `json:"lifetime_days"`
-		Verdict100D  string `json:"verdict_100d"`
-		Owners       []struct {
+		Fingerprint       string `json:"fingerprint_sha256"`
+		LifetimeDays      int    `json:"lifetime_days"`
+		Verdict100D       string `json:"verdict_100d"`
+		CorrelationMethod string `json:"correlation_method"`
+		Owners            []struct {
 			Owner  string `json:"owner"`
 			Source string `json:"owner_source"`
 		} `json:"owners"`
@@ -74,7 +76,7 @@ func repoRoot(t *testing.T) string {
 
 // scan runs the built CLI with `--kube` and returns its JSON output. Exit code 3
 // (findings present) is accepted; any other failure is fatal.
-func scan(t *testing.T, kubeContext string) ([]byte, []byte) {
+func scan(t *testing.T, kubeContext string, extraArgs ...string) ([]byte, []byte) {
 	t.Helper()
 	root := repoRoot(t)
 	binary := filepath.Join(t.TempDir(), "scadenza")
@@ -85,7 +87,9 @@ func scan(t *testing.T, kubeContext string) ([]byte, []byte) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, binary, "scan", "--kube", "--kube-context", kubeContext, "--format", "json")
+	args := []string{"scan", "--kube", "--kube-context", kubeContext, "--format", "json"}
+	args = append(args, extraArgs...)
+	command := exec.CommandContext(ctx, binary, args...)
 	command.Dir = root
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -111,9 +115,7 @@ func TestScanKubernetesSource(t *testing.T) {
 	}
 
 	output, scanErrors := scan(t, kubeContext)
-	if strings.Contains(string(output), "PRIVATE KEY") || strings.Contains(string(scanErrors), "PRIVATE KEY") {
-		t.Fatalf("scan streams contain private key material; stdout=%s stderr=%s", output, scanErrors)
-	}
+	assertNoSecretData(t, output, scanErrors)
 	var document scanDocument
 	if err := json.Unmarshal(output, &document); err != nil {
 		t.Fatalf("decode scan JSON: %v\n%s", err, output)
@@ -122,10 +124,17 @@ func TestScanKubernetesSource(t *testing.T) {
 	if !contains(document.SourcesUsed, "kube") {
 		t.Fatalf("sources_used = %v, want kube", document.SourcesUsed)
 	}
+	foundSecretListWarning := false
 	for _, diagnostic := range document.Diagnostics {
 		if diagnostic.Code == "SCD-0014" {
 			t.Fatalf("cluster was reported unreachable: %s", output)
 		}
+		if diagnostic.Code == "SCD-0015" {
+			foundSecretListWarning = true
+		}
+	}
+	if !foundSecretListWarning {
+		t.Fatalf("default read-only scan did not document forbidden Secret metadata: %s", output)
 	}
 
 	locations := map[string]bool{}
@@ -137,6 +146,9 @@ func TestScanKubernetesSource(t *testing.T) {
 		for _, owner := range certificate.Owners {
 			owners[owner.Owner] = owner.Source
 		}
+		if certificate.CorrelationMethod != "unresolved" {
+			t.Errorf("correlation_method = %q, want unresolved without CT/TLS match", certificate.CorrelationMethod)
+		}
 		for _, observation := range certificate.Observations {
 			locations[observation.Location] = true
 			if observation.Kubernetes == nil {
@@ -145,14 +157,12 @@ func TestScanKubernetesSource(t *testing.T) {
 			if observation.Source == "cert-manager" {
 				certManagerTypes = append(certManagerTypes, observation.Kubernetes.IssuerType)
 			}
+			if observation.Source == "kube-secret" {
+				t.Errorf("default mode read Secret data: %+v", observation)
+			}
 		}
 	}
 
-	for _, secret := range []string{namespace + "/short-tls", namespace + "/long-tls"} {
-		if !locations[secret] {
-			t.Errorf("no observation for %s; locations = %v", secret, sortedLocations(locations))
-		}
-	}
 	if len(certManagerTypes) == 0 {
 		t.Fatal("no cert-manager Certificate observation was reported")
 	}
@@ -169,6 +179,70 @@ func TestScanKubernetesSource(t *testing.T) {
 	}
 	if !slices.IsSorted(fingerprints(document)) {
 		t.Error("certificates are not sorted by fingerprint")
+	}
+}
+
+func TestScanKubernetesSecretDataOptIn(t *testing.T) {
+	kubeContext := os.Getenv(secretsKubeContextEnv)
+	if kubeContext == "" {
+		t.Skipf("%s is not set; skipping the Secret-data cluster e2e", secretsKubeContextEnv)
+	}
+	namespace := os.Getenv(namespaceEnv)
+	if namespace == "" {
+		namespace = "scadenza-e2e"
+	}
+
+	output, scanErrors := scan(t, kubeContext, "--kube-secrets")
+	assertNoSecretData(t, output, scanErrors)
+	var document scanDocument
+	if err := json.Unmarshal(output, &document); err != nil {
+		t.Fatalf("decode scan JSON: %v\n%s", err, output)
+	}
+	if !contains(document.SourcesUsed, "kube") {
+		t.Fatalf("sources_used = %v, want kube", document.SourcesUsed)
+	}
+	foundSecretReadDiagnostic := false
+	for _, diagnostic := range document.Diagnostics {
+		switch diagnostic.Code {
+		case "SCD-0014":
+			t.Fatalf("cluster was reported unreachable: %s", output)
+		case "SCD-0015":
+			t.Fatalf("secrets manifest still forbids Secret reads: %s", output)
+		case "SCD-0029":
+			foundSecretReadDiagnostic = true
+		}
+	}
+	if !foundSecretReadDiagnostic {
+		t.Fatalf("missing SCD-0029 Secret-data diagnostic: %s", output)
+	}
+
+	locations := map[string]bool{}
+	fingerprinted := 0
+	for _, certificate := range document.Certificates {
+		if certificate.Fingerprint != "" {
+			fingerprinted++
+		}
+		for _, observation := range certificate.Observations {
+			locations[observation.Location] = true
+		}
+	}
+	for _, secret := range []string{namespace + "/short-tls", namespace + "/long-tls"} {
+		if !locations[secret] {
+			t.Errorf("no typed Secret observation for %s; locations = %v", secret, sortedLocations(locations))
+		}
+	}
+	if fingerprinted < 2 {
+		t.Errorf("fingerprinted certificates = %d, want at least 2", fingerprinted)
+	}
+}
+
+func assertNoSecretData(t *testing.T, output, scanErrors []byte) {
+	t.Helper()
+	for name, stream := range map[string]string{"stdout": string(output), "stderr": string(scanErrors)} {
+		lower := strings.ToLower(stream)
+		if strings.Contains(lower, "tls.key") || strings.Contains(lower, "private key") {
+			t.Fatalf("%s contains Secret key material: %s", name, stream)
+		}
 	}
 }
 

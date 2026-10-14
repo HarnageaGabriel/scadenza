@@ -87,6 +87,7 @@ type Config struct {
 // Kube configures the Kubernetes source.
 type Kube struct {
 	Enabled       bool
+	Secrets       bool
 	Context       string
 	Namespaces    []string
 	OwnershipFile string
@@ -113,6 +114,7 @@ type document struct {
 
 type kubeDoc struct {
 	Enabled       bool     `yaml:"enabled"`
+	Secrets       bool     `yaml:"secrets"`
 	Context       string   `yaml:"context"`
 	Namespaces    []string `yaml:"namespaces"`
 	OwnershipFile string   `yaml:"ownershipFile"`
@@ -170,6 +172,7 @@ func Parse(data []byte) (Config, error) {
 	if decoded.Kube != nil {
 		config.Kube = Kube{
 			Enabled:       decoded.Kube.Enabled,
+			Secrets:       decoded.Kube.Secrets,
 			Context:       decoded.Kube.Context,
 			Namespaces:    decoded.Kube.Namespaces,
 			OwnershipFile: decoded.Kube.OwnershipFile,

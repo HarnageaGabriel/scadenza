@@ -61,31 +61,44 @@ derived names are listed in `unresolved` with reason `host-cap` and reported as
   `generated_at`.
 - `--config path` reads an explicit YAML file; see
   [configuration](../configuration.md). It is never auto-loaded.
-- `--kube` also reads TLS Secrets and cert-manager Certificates from a
-  Kubernetes cluster, read-only.
+- `--kube` reads TLS Secret metadata and cert-manager Certificates from a
+  Kubernetes cluster, read-only. It does not read Secret data.
+- `--kube-secrets` additionally reads `tls.crt` from `kubernetes.io/tls`
+  Secrets so fingerprints can be computed. It requires `--kube`, emits
+  informational `SCD-0029` with the affected namespaces, and is off by default.
 - `--kube-context name`, `--kubeconfig path`, `--namespace ns` (repeatable,
   default all namespaces), `--ownership-file path`, `--kube-qps 5` configure the
   Kubernetes source. They require `--kube`.
 
 ## Kubernetes source
 
-`scan --kube` adds a read-only Kubernetes source. It lists Secrets with the
-server-side field selector `type=kubernetes.io/tls`, reads only `tls.crt`, and
-parses the PEM chain. The leaf's SHA-256 DER fingerprint merges it into the same
-inventory as Certificate Transparency and live handshakes. `tls.key` is dropped
-from the object as soon as the list response is decoded and is never decoded,
-copied, logged, or retained.
+By default, `scan --kube` uses client-go's metadata client to list Secrets with
+the server-side field selector `type=kubernetes.io/tls`. The response is
+`PartialObjectMetadata` and contains only names, namespaces, labels, and
+annotations—no `data` or `stringData`. Each matching Secret is reported as a
+`kube-secret-metadata` observation with its owner signals and no certificate
+data. If Secret metadata is forbidden, the scan records warning `SCD-0015` and
+continues with cert-manager and namespace observations.
+
+`--kube-secrets` restores full `kubernetes.io/tls` Secret listing. Scadenza
+reads only `tls.crt`, drops `tls.key` immediately after decoding the response,
+and never decodes, copies, logs, or retains it. The leaf SHA-256 fingerprint
+then merges into the shared inventory. The opt-in emits `SCD-0029` before the
+read and names `all` or the explicit namespaces whose Secret data may be read.
 
 It also reads cert-manager `Certificate` resources at `cert-manager.io/v1` and
 reports the issuer kind and name, the resolved issuer type (`acme`, `ca`,
 `selfSigned`, `vault`, `venafi`, `external`, or `unknown`, taken only when
 exactly one recognized `spec` key has a map value), the ACME directory server URL, `spec.duration`,
-`spec.renewBefore`, `spec.renewBeforePercentage`, `status.notAfter`,
-`status.renewalTime`, and the `Ready` condition, and the
-`cert-manager.io/certificate-name` annotation of a TLS
-Secret. M4b classifies renewal from these facts without re-reading the cluster;
-see [renewal](../renewal.md). Private keys and `privateKeySecretRef` targets are
-never read.
+`spec.renewBefore`, `spec.renewBeforePercentage`, `spec.dnsNames`,
+`status.notBefore`, `status.notAfter`, `status.renewalTime`, and the `Ready`
+condition, plus the
+`cert-manager.io/certificate-name` annotation on Secret metadata. Certificate
+observations are built from those status/spec facts without a fingerprint and
+remain `correlation_method: unresolved` unless the documented weak join below
+applies. M4b classifies renewal from these facts without re-reading the
+cluster; see [renewal](../renewal.md). Private keys and
+`privateKeySecretRef` targets are never read.
 
 Kubernetes certificates that do not verify against the system roots keep the
 inventory entry but get no 100-day verdict: `verdict_100d` is `not_applicable`
@@ -108,7 +121,14 @@ reported as `namespace-annotation` and a namespace label as `namespace-label`.
 
 Credentials and kubeconfig content are never printed. Reads use only `list` and
 `get`; the minimal RBAC is in
-[`deploy/rbac/scadenza-readonly.yaml`](../../deploy/rbac/scadenza-readonly.yaml).
+[`deploy/rbac/scadenza-readonly.yaml`](../../deploy/rbac/scadenza-readonly.yaml)
+has no `secrets` rule, so it is safe for default metadata mode;
+[`deploy/rbac/scadenza-readonly-secrets.yaml`](../../deploy/rbac/scadenza-readonly-secrets.yaml)
+adds `secrets` list/get for `--kube-secrets` and includes a per-namespace Role
+example. **VERIFY (2026-10-15):** confirmed against
+<https://kubernetes.io/docs/reference/access-authn-authz/authorization/#reviewing-request-fields>
+that RBAC authorizes request attributes rather than the response representation
+or field selector, so it cannot distinguish a metadata list from a full list.
 Kubernetes client errors are reduced to HTTP status, StatusReason, resource
 kind, and namespace; their raw text is never printed. A 401 makes the
 Kubernetes source unavailable. A 403 is a partial warning when at least one
@@ -135,6 +155,10 @@ Every certificate states how strong its correlation is in `correlation_method`:
 
 - `sha256` - the entry is keyed by a SHA-256 fingerprint.
 - `issuer_serial` - it was matched by issuer and serial number.
+- `names_and_expiry` - a fingerprintless cert-manager observation was joined to
+  exactly one CT or live certificate because the complete normalized name sets
+  are equal and `notAfter` is exactly equal. Zero or multiple matches stay
+  separate with `unresolved`.
 - `unresolved` - nothing correlated the record.
 
 The value is the **weakest** evidence that placed the certificate in the
@@ -261,5 +285,4 @@ within `scadenza.scan/v1` under the rules of
 [ADR 0007](../adr/0007-json-compatibility.md). It also carries the M3 additions:
 `owners`, the per-observation `kubernetes` object, and the Kubernetes
 `sources_used`, `verdict_100d`, findings kind, and observation source values.
-
 

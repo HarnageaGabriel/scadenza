@@ -120,6 +120,10 @@ jobs:
               fi
             done
           done
+          if [[ "$(kubectl auth can-i list secrets --as="${service_account}" --all-namespaces)" != "no" ]]; then
+            echo "default service account unexpectedly lists Secrets" >&2
+            exit 1
+          fi
           kubeconfig="${RUNNER_TEMP}/scadenza-readonly.kubeconfig"
           ca_file="${RUNNER_TEMP}/scadenza-readonly-ca.crt"
           kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 --decode > "${ca_file}"
@@ -130,10 +134,30 @@ jobs:
           kubectl config --kubeconfig="${kubeconfig}" set-context scadenza-readonly --cluster=scadenza-e2e --user=scadenza-readonly
           echo "kubeconfig=${kubeconfig}" >> "${GITHUB_OUTPUT}"
           echo "context=scadenza-readonly" >> "${GITHUB_OUTPUT}"
+          kubectl apply -f deploy/rbac/scadenza-readonly-secrets.yaml
+          secrets_service_account=system:serviceaccount:scadenza:scadenza-readonly-secrets
+          for verb in list get; do
+            if [[ "$(kubectl auth can-i "${verb}" secrets --as="${secrets_service_account}" --all-namespaces)" != "yes" ]]; then
+              echo "Secrets service account cannot ${verb} Secrets" >&2
+              exit 1
+            fi
+          done
+          secrets_kubeconfig="${RUNNER_TEMP}/scadenza-readonly-secrets.kubeconfig"
+          secrets_ca_file="${RUNNER_TEMP}/scadenza-readonly-secrets-ca.crt"
+          kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 --decode > "${secrets_ca_file}"
+          secrets_server="$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.server}')"
+          secrets_token="$(kubectl -n scadenza create token scadenza-readonly-secrets --duration=30m)"
+          kubectl config --kubeconfig="${secrets_kubeconfig}" set-cluster scadenza-e2e --server="${secrets_server}" --certificate-authority="${secrets_ca_file}" --embed-certs=true
+          kubectl config --kubeconfig="${secrets_kubeconfig}" set-credentials scadenza-readonly-secrets --token="${secrets_token}"
+          kubectl config --kubeconfig="${secrets_kubeconfig}" set-context scadenza-readonly-secrets --cluster=scadenza-e2e --user=scadenza-readonly-secrets
+          echo "secrets_kubeconfig=${secrets_kubeconfig}" >> "${GITHUB_OUTPUT}"
+          echo "secrets_context=scadenza-readonly-secrets" >> "${GITHUB_OUTPUT}"
       - name: Run the Kubernetes source e2e
         env:
           KUBECONFIG: ${{ steps.readonly.outputs.kubeconfig }}
           SCADENZA_E2E_KUBE_CONTEXT: ${{ steps.readonly.outputs.context }}
+          SCADENZA_E2E_SECRETS_KUBECONFIG: ${{ steps.readonly.outputs.secrets_kubeconfig }}
+          SCADENZA_E2E_SECRETS_KUBE_CONTEXT: ${{ steps.readonly.outputs.secrets_context }}
           SCADENZA_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
         run: go test -tags e2e -count=1 -v ./test/e2e/...
       - name: Cluster state on failure

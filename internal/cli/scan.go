@@ -77,6 +77,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	var timeout time.Duration
 	var format string
 	var kubeEnabled bool
+	var kubeSecrets bool
 	var kubeContext, kubeconfig, ownershipFile string
 	var namespaces []string
 	var kubeQPS float64
@@ -96,7 +97,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 					return &commandError{code: ExitUsageError}
 				}
 				applyScanConfig(command, loaded, &domains, &hosts, &hostsFile, &fromCT, &port,
-					&kubeEnabled, &kubeContext, &namespaces, &ownershipFile, &failOn, &strict, &minCoverage)
+					&kubeEnabled, &kubeSecrets, &kubeContext, &namespaces, &ownershipFile, &failOn, &strict, &minCoverage)
 				renewalModes = loaded.Renewal
 			}
 			failOnKinds, failErr := config.ParseFailOn(failOn)
@@ -124,8 +125,8 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				emitDiagnostic(stderr, "SCD-0001", "--kube-qps must be positive")
 				return &commandError{code: ExitUsageError}
 			}
-			if !kubeEnabled && (len(namespaces) > 0 || kubeContext != "" || kubeconfig != "" || ownershipFile != "" || command.Flags().Changed("kube-qps")) {
-				emitDiagnostic(stderr, "SCD-0001", "--kube-context, --kubeconfig, --namespace, --ownership-file, and --kube-qps require --kube")
+			if !kubeEnabled && (kubeSecrets || len(namespaces) > 0 || kubeContext != "" || kubeconfig != "" || ownershipFile != "" || command.Flags().Changed("kube-qps")) {
+				emitDiagnostic(stderr, "SCD-0001", "--kube-secrets, --kube-context, --kubeconfig, --namespace, --ownership-file, and --kube-qps require --kube")
 				return &commandError{code: ExitUsageError}
 			}
 			normalizedDomains, err := normalizeDomains(domains)
@@ -191,11 +192,16 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 					Kubeconfig: kubeconfig,
 					QPS:        kubeQPS,
 					UserAgent:  "scadenza/" + version.Version,
-				}, kube.Options{Namespaces: namespaces, Owners: owners, Clock: evaluationClock})
+				}, kube.Options{Namespaces: namespaces, Owners: owners, Secrets: kubeSecrets, Clock: evaluationClock})
 				if loadErr != nil {
 					diagnostics.add(kube.CodeUnreachable, "")
 					emitDiagnostic(stderr, kube.CodeUnreachable, "")
 				} else {
+					if kubeSecrets {
+						detail := "namespaces=" + kubeSecretNamespaceDetail(namespaces)
+						diagnostics.add(kube.CodeSecretDataRead, detail)
+						emitDiagnostic(stderr, kube.CodeSecretDataRead, detail)
+					}
 					scanResult, scanErr := source.Scan(command.Context())
 					kubeProblems = len(scanResult.Problems)
 					for _, problem := range scanResult.Problems {
@@ -418,7 +424,8 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	command.Flags().StringVar(&format, "format", "table", "output format: table, json, csv")
 	command.Flags().IntVar(&maxHosts, "max-hosts", 200, "maximum hosts to probe")
 	command.Flags().StringSliceVar(&sourceNames, "source", []string{"certspotter", "crtsh"}, "Certificate Transparency source order (certspotter, crtsh)")
-	command.Flags().BoolVar(&kubeEnabled, "kube", false, "also read TLS Secrets and cert-manager Certificates from a Kubernetes cluster, read-only")
+	command.Flags().BoolVar(&kubeEnabled, "kube", false, "also read Secret metadata and cert-manager Certificates from a Kubernetes cluster, read-only")
+	command.Flags().BoolVar(&kubeSecrets, "kube-secrets", false, "read tls.crt from kubernetes.io/tls Secrets; requires --kube")
 	command.Flags().StringVar(&kubeContext, "kube-context", "", "kubeconfig context to use")
 	command.Flags().StringVar(&kubeconfig, "kubeconfig", "", "kubeconfig file to use; defaults to KUBECONFIG or the in-cluster configuration")
 	command.Flags().StringArrayVar(&namespaces, "namespace", nil, "namespace to read; repeatable; default all namespaces")
@@ -593,7 +600,7 @@ func configErrorDetail(err error) string {
 // matching flag was not set on the command line, so flags always win.
 func applyScanConfig(command *cobra.Command, loaded config.Config,
 	domains, hosts *[]string, hostsFile *string, fromCT *bool, port *int,
-	kubeEnabled *bool, kubeContext *string, namespaces *[]string, ownershipFile *string,
+	kubeEnabled, kubeSecrets *bool, kubeContext *string, namespaces *[]string, ownershipFile *string,
 	failOn *string, strict *bool, minCoverage *int,
 ) {
 	if !command.Flags().Changed("domain") && len(loaded.Domains) > 0 {
@@ -614,6 +621,9 @@ func applyScanConfig(command *cobra.Command, loaded config.Config,
 	if !command.Flags().Changed("kube") && loaded.Kube.Enabled {
 		*kubeEnabled = true
 	}
+	if !command.Flags().Changed("kube-secrets") && loaded.Kube.Secrets {
+		*kubeSecrets = true
+	}
 	if !command.Flags().Changed("kube-context") && loaded.Kube.Context != "" {
 		*kubeContext = loaded.Kube.Context
 	}
@@ -632,6 +642,27 @@ func applyScanConfig(command *cobra.Command, loaded config.Config,
 	if !command.Flags().Changed("min-coverage") && loaded.Policy.MinCoverage != nil {
 		*minCoverage = *loaded.Policy.MinCoverage
 	}
+}
+
+func kubeSecretNamespaceDetail(namespaces []string) string {
+	if len(namespaces) == 0 {
+		return "all"
+	}
+	set := map[string]bool{}
+	result := make([]string, 0, len(namespaces))
+	for _, namespace := range namespaces {
+		namespace = strings.TrimSpace(namespace)
+		if namespace == "" || set[namespace] {
+			continue
+		}
+		set[namespace] = true
+		result = append(result, namespace)
+	}
+	if len(result) == 0 {
+		return "all"
+	}
+	sort.Strings(result)
+	return strings.Join(result, ",")
 }
 
 func kubeProblemDetail(problem kube.Problem) string {

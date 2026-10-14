@@ -79,6 +79,13 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 			}
 			return stdout.Bytes()
 		}},
+		{"scan kube secrets", "scan-v1.schema.json", func(t *testing.T) []byte {
+			var stdout bytes.Buffer
+			if code := execute([]string{"scan", "--kube", "--kube-secrets", "--format", "json"}, &stdout, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
+				t.Fatalf("kube scan exit = %d", code)
+			}
+			return stdout.Bytes()
+		}},
 	}
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {

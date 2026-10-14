@@ -1,7 +1,6 @@
-// Package kube reads certificates from Kubernetes read-only. It lists TLS
-// Secrets (type kubernetes.io/tls) and cert-manager Certificate resources with
-// the list and get verbs only, parses certificate chains without ever decoding
-// key material, and hands the results to the shared inventory.
+// Package kube reads certificate facts from Kubernetes read-only. By default it
+// reads Secret metadata and cert-manager Certificate resources; reading Secret
+// data is an explicit opt-in. Every request uses only list and get.
 //
 // Reading strategy and the minimal RBAC are documented in
 // docs/adr/0005-kubernetes-client.md and docs/cli/scan.md.
@@ -29,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 )
 
 // Observation sources recorded in the shared inventory.
@@ -37,6 +37,8 @@ const (
 	SourceSecret = "kube-secret"
 	// SourceCertManager marks facts read from a cert-manager Certificate.
 	SourceCertManager = "cert-manager"
+	// SourceSecretMetadata marks TLS Secret metadata read without Secret data.
+	SourceSecretMetadata = "kube-secret-metadata"
 )
 
 // Stable diagnostic codes reported by the Kubernetes source. Their pages are
@@ -56,6 +58,10 @@ const (
 	CodeCRDMissing = "SCD-0018"
 	// CodeOwnershipFileInvalid reports an ownership file that could not be used.
 	CodeOwnershipFileInvalid = "SCD-0019"
+	// CodeSecretDataRead reports that opt-in Secret data reads are enabled.
+	//
+	//nolint:gosec // G101: an SCD diagnostic code, not a credential.
+	CodeSecretDataRead = "SCD-0029"
 )
 
 // defaultLimit is the list/continue page size.
@@ -63,6 +69,9 @@ const defaultLimit = 500
 
 // tlsSecretFieldSelector asks the API server for TLS secrets only.
 const tlsSecretFieldSelector = "type=kubernetes.io/tls" //nolint:gosec // G101: a Kubernetes field selector, not a credential.
+
+// secretResource identifies core Secrets for the metadata client.
+var secretResource = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
 
 // certificateNameAnnotation is the cert-manager Secret annotation that names the
 // Certificate managing it. It is already read for ownership resolution and is
@@ -100,6 +109,7 @@ type Kubernetes struct {
 	// percentage of the actual issued lifetime at which renewal happens.
 	RenewBeforePercentage string `json:"renew_before_percentage,omitempty"`
 	NotAfter              string `json:"status_not_after,omitempty"`
+	NotBefore             string `json:"status_not_before,omitempty"`
 	RenewalTime           string `json:"status_renewal_time,omitempty"`
 	Ready                 string `json:"ready,omitempty"`
 	ReadyReason           string `json:"ready_reason,omitempty"`
@@ -152,6 +162,7 @@ type Result struct {
 // Clients are the read-only Kubernetes clients a Scanner uses.
 type Clients struct {
 	Kubernetes kubernetes.Interface
+	Metadata   metadata.Interface
 	Dynamic    dynamic.Interface
 }
 
@@ -168,6 +179,9 @@ type Options struct {
 	Roots *x509.CertPool
 	// Clock supplies verification time; nil uses the system clock.
 	Clock clock.Clock
+	// Secrets enables full kubernetes.io/tls Secret reads for tls.crt. It is
+	// false by default; without it only Secret metadata is read.
+	Secrets bool
 }
 
 // Source is the read interface the CLI depends on.
@@ -206,17 +220,25 @@ type secretCertificate struct {
 	secretName  string
 }
 
+// metadataSecret is a TLS Secret observed through metadata only.
+type metadataSecret struct {
+	certificate Certificate
+	namespace   string
+	secretName  string
+}
+
 // managerFact is one cert-manager Certificate observation.
 type managerFact struct {
 	namespace   string
 	name        string
 	secretName  string
+	certificate Certificate
 	observation Observation
 	owners      []owner.Owner
 }
 
-// Scan lists TLS Secrets and cert-manager Certificates and returns the
-// certificates it could parse. Problems are non-fatal; an error is returned only
+// Scan reads the configured Kubernetes sources. Secret data is read only when
+// Options.Secrets is set. Problems are non-fatal; an error is returned only
 // when no Kubernetes source could be read at all.
 func (s *Scanner) Scan(ctx context.Context) (Result, error) {
 	result := Result{}
@@ -226,20 +248,37 @@ func (s *Scanner) Scan(ctx context.Context) (Result, error) {
 	listSucceeded := false
 	authenticationFailed := false
 	parsed := []secretCertificate{}
-	for _, namespace := range s.scope() {
-		listed := false
-		for secret, err := range s.secrets(ctx, namespace, &listed) {
-			if err != nil {
-				problem, _ := classify(err, "secrets", namespace, false)
-				result.Problems = append(result.Problems, problem)
-				authenticationFailed = authenticationFailed || apierrors.IsUnauthorized(err)
-				break
+	metadataOnly := []metadataSecret{}
+	if s.Options.Secrets {
+		for _, namespace := range s.scope() {
+			listed := false
+			for secret, err := range s.secrets(ctx, namespace, &listed) {
+				if err != nil {
+					problem, _ := classify(err, "secrets", namespace, false)
+					result.Problems = append(result.Problems, problem)
+					authenticationFailed = authenticationFailed || apierrors.IsUnauthorized(err)
+					break
+				}
+				found, secretProblems := s.certificatesFromSecret(secret, namespaces)
+				result.Problems = append(result.Problems, secretProblems...)
+				parsed = append(parsed, found...)
 			}
-			found, secretProblems := s.certificatesFromSecret(secret, namespaces)
-			result.Problems = append(result.Problems, secretProblems...)
-			parsed = append(parsed, found...)
+			listSucceeded = listSucceeded || listed
 		}
-		listSucceeded = listSucceeded || listed
+	} else {
+		for _, namespace := range s.scope() {
+			listed := false
+			for secret, err := range s.secretMetadata(ctx, namespace, &listed) {
+				if err != nil {
+					problem, _ := classify(err, "secrets", namespace, false)
+					result.Problems = append(result.Problems, problem)
+					authenticationFailed = authenticationFailed || apierrors.IsUnauthorized(err)
+					break
+				}
+				metadataOnly = append(metadataOnly, s.metadataSecretFact(secret, namespaces))
+			}
+			listSucceeded = listSucceeded || listed
+		}
 	}
 
 	facts, certificatesListed, certificateProblems, certificateAuthFailed, _ := s.certificateFacts(ctx, namespaces)
@@ -247,7 +286,7 @@ func (s *Scanner) Scan(ctx context.Context) (Result, error) {
 	listSucceeded = listSucceeded || certificatesListed
 	authenticationFailed = authenticationFailed || certificateAuthFailed
 
-	result.Certificates = attachFacts(parsed, facts)
+	result.Certificates = attachFacts(parsed, metadataOnly, facts)
 	sortCertificates(result.Certificates)
 	result.Problems = uniqueProblems(result.Problems)
 
@@ -255,6 +294,46 @@ func (s *Scanner) Scan(ctx context.Context) (Result, error) {
 		return Result{Problems: result.Problems}, fmt.Errorf("read Kubernetes: %w", errUnreachable)
 	}
 	return result, nil
+}
+
+// secretMetadata streams TLS Secret metadata from the dedicated metadata
+// client. The API response is PartialObjectMetadata and contains no Secret data.
+func (s *Scanner) secretMetadata(ctx context.Context, namespace string, listed *bool) iter.Seq2[metav1.PartialObjectMetadata, error] {
+	if s.Clients.Metadata == nil {
+		return func(yield func(metav1.PartialObjectMetadata, error) bool) {
+			yield(metav1.PartialObjectMetadata{}, errors.New("Kubernetes metadata client not configured"))
+		}
+	}
+	return paginate(ctx, s.limit(), func(ctx context.Context, options metav1.ListOptions) ([]metav1.PartialObjectMetadata, string, error) {
+		options.FieldSelector = tlsSecretFieldSelector
+		list, err := s.Clients.Metadata.Resource(secretResource).Namespace(namespace).List(ctx, options)
+		if err != nil {
+			return nil, "", err
+		}
+		*listed = true
+		return list.Items, list.Continue, nil
+	})
+}
+
+// metadataSecretFact records only the metadata fields Kubernetes returned.
+func (s *Scanner) metadataSecretFact(secret metav1.PartialObjectMetadata, namespaces map[string]namespaceSignals) metadataSecret {
+	location := secret.Namespace + "/" + secret.Name
+	certificate := Certificate{
+		DedupKey: "secret-metadata/" + location,
+		Owners:   s.Options.Owners.Resolve(s.signals(secret.Namespace, "secret/"+location, secret.Labels, secret.Annotations, nil, namespaces)),
+		Observations: []Observation{{
+			Source:   SourceSecretMetadata,
+			Location: location,
+			Detail:   "kubernetes.io/tls Secret metadata; certificate data not read",
+			Kubernetes: &Kubernetes{
+				Resource:        "secrets.metadata",
+				Namespace:       secret.Namespace,
+				Name:            secret.Name,
+				CertificateName: secret.Annotations[certificateNameAnnotation],
+			},
+		}},
+	}
+	return metadataSecret{certificate: certificate, namespace: secret.Namespace, secretName: secret.Name}
 }
 
 // scope returns the namespaces to list, sorted and deduplicated. An empty result
@@ -401,10 +480,10 @@ func (s *Scanner) signals(namespace, object string, labels, annotations map[stri
 	}
 }
 
-// attachFacts merges cert-manager observations into the certificates read from
-// secrets, and emits one entry for each Certificate whose secret was not read.
-func attachFacts(parsed []secretCertificate, facts []managerFact) []Certificate {
-	result := make([]Certificate, 0, len(parsed)+len(facts))
+// attachFacts merges cert-manager observations into certificates and metadata
+// observations, and emits entries for unmatched sources.
+func attachFacts(parsed []secretCertificate, metadataOnly []metadataSecret, facts []managerFact) []Certificate {
+	result := make([]Certificate, 0, len(parsed)+len(metadataOnly)+len(facts))
 	matched := make([]bool, len(facts))
 	for _, entry := range parsed {
 		certificate := entry.certificate
@@ -424,13 +503,42 @@ func attachFacts(parsed []secretCertificate, facts []managerFact) []Certificate 
 		if matched[index] {
 			continue
 		}
-		result = append(result, Certificate{
-			DedupKey:     "cert-manager/" + fact.namespace + "/" + fact.name,
-			Owners:       sortOwners(fact.owners),
-			Observations: []Observation{fact.observation},
-		})
+		certificate := fact.certificate
+		certificate.Owners = sortOwners(fact.owners)
+		certificate.Observations = []Observation{fact.observation}
+		result = append(result, certificate)
+	}
+	for _, entry := range metadataOnly {
+		matchedFact := -1
+		for index, fact := range facts {
+			if fact.namespace == entry.namespace && fact.secretName == entry.secretName {
+				matchedFact = index
+				break
+			}
+		}
+		if matchedFact >= 0 {
+			certificate := resultCertificateForFact(result, facts[matchedFact])
+			if certificate == nil {
+				continue
+			}
+			certificate.Observations = append(certificate.Observations, entry.certificate.Observations...)
+			certificate.Owners = mergeOwners(certificate.Owners, entry.certificate.Owners)
+			sortObservations(certificate.Observations)
+			certificate.Owners = sortOwners(certificate.Owners)
+			continue
+		}
+		result = append(result, entry.certificate)
 	}
 	return result
+}
+
+func resultCertificateForFact(entries []Certificate, fact managerFact) *Certificate {
+	for index := range entries {
+		if entries[index].DedupKey == "cert-manager/"+fact.namespace+"/"+fact.name {
+			return &entries[index]
+		}
+	}
+	return nil
 }
 
 func mergeOwners(existing, added []owner.Owner) []owner.Owner {

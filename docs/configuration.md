@@ -27,6 +27,9 @@ port: 443
 
 kube:
   enabled: false
+  # Read tls.crt from TLS Secrets. Off by default; requires enabled: true.
+  # Emits SCD-0029 naming the namespaces whose Secret data may be read.
+  secrets: false
   context: kind-scadenza
   namespaces:
     - payments
@@ -70,7 +73,8 @@ Command-line flags always win over the file. A value is taken from the file only
 when the matching flag was not set on the command line; otherwise the flag value
 is used. The mapping is one flag per key: `--domain`/`domains`,
 `--host`/`hosts`, `--hosts-file`/`hostsFile`, `--from-ct`/`fromCT`,
-`--port`/`port`, `--kube`/`kube.enabled`, `--kube-context`/`kube.context`,
+`--port`/`port`, `--kube`/`kube.enabled`, `--kube-secrets`/`kube.secrets`,
+`--kube-context`/`kube.context`,
 `--namespace`/`kube.namespaces`, `--ownership-file`/`kube.ownershipFile`,
 `--fail-on`/`policy.failOn`, `--strict`/`policy.strict`,
 `--min-coverage`/`policy.minCoverage`. There is no flag for `renewal`; it is

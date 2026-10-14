@@ -662,6 +662,7 @@ func TestScanKubeFlagsRequireKube(t *testing.T) {
 		{"scan", "--domain", "example.com", "--kubeconfig", "/tmp/kubeconfig"},
 		{"scan", "--domain", "example.com", "--namespace", "payments"},
 		{"scan", "--domain", "example.com", "--ownership-file", "owners.yaml"},
+		{"scan", "--domain", "example.com", "--kube-secrets"},
 		{"scan", "--kube", "--kube-qps", "0"},
 		{"scan", "--domain", "example.com", "--kube-qps", "1"},
 	} {
@@ -694,6 +695,42 @@ func TestScanKubePassesNamespacesAndRate(t *testing.T) {
 	}
 	if keys := options.Owners.LabelKeys(); len(keys) != 1 || keys[0] != "scadenza.io/owner" {
 		t.Fatalf("default label keys = %v", keys)
+	}
+	if options.Secrets {
+		t.Fatal("default -- kube must not read Secret data")
+	}
+}
+
+func TestScanKubeSecretsFlagAndDiagnostic(t *testing.T) {
+	var options kube.Options
+	dependencies := scanDependencies("x", fakeProber{})
+	dependencies.loadKube = func(_ kube.LoadOptions, scan0 kube.Options) (kube.Source, error) {
+		options = scan0
+		return fakeKubeSource{}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{
+		"scan", "--kube", "--kube-secrets", "--namespace", "shop", "--namespace", "payments",
+		"--format", "json",
+	}, &stdout, &stderr, dependencies)
+	if code != ExitOK {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+	}
+	if !options.Secrets {
+		t.Fatal("--kube-secrets did not enable Options.Secrets")
+	}
+	if !strings.Contains(stderr.String(), "SCD-0029") ||
+		!strings.Contains(stderr.String(), "namespaces=payments,shop") {
+		t.Fatalf("missing Secret-data diagnostic: %s", stderr.String())
+	}
+}
+
+func TestKubeSecretNamespaceDetail(t *testing.T) {
+	if got := kubeSecretNamespaceDetail([]string{"", "  "}); got != "all" {
+		t.Fatalf("empty namespace scope = %q, want all", got)
+	}
+	if got := kubeSecretNamespaceDetail([]string{"shop", "payments", "shop"}); got != "payments,shop" {
+		t.Fatalf("namespace scope = %q, want payments,shop", got)
 	}
 }
 

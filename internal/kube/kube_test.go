@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	metadatafake "k8s.io/client-go/metadata/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -134,6 +136,22 @@ func tlsSecret(namespace, name string, data map[string][]byte, labels map[string
 	}
 }
 
+func metadataFor(t *testing.T, secrets ...*corev1.Secret) *metadatafake.FakeMetadataClient {
+	t.Helper()
+	scheme := metadatafake.NewTestScheme()
+	if err := metav1.AddMetaToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	objects := make([]runtime.Object, 0, len(secrets))
+	for _, secret := range secrets {
+		objects = append(objects, &metav1.PartialObjectMetadata{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+			ObjectMeta: secret.ObjectMeta,
+		})
+	}
+	return metadatafake.NewSimpleMetadataClient(scheme, objects...)
+}
+
 func certManagerListKinds() map[schema.GroupVersionResource]string {
 	return map[schema.GroupVersionResource]string{
 		certManagerResource(certificateResourceName): "CertificateList",
@@ -170,7 +188,7 @@ func testOptions(t *testing.T, document string) Options {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Options{Owners: config, Clock: clock.Fixed{Time: testNow}}
+	return Options{Owners: config, Clock: clock.Fixed{Time: testNow}, Secrets: true}
 }
 
 func TestScanTLSSecret(t *testing.T) {
@@ -211,6 +229,135 @@ func TestScanTLSSecret(t *testing.T) {
 	}
 	if len(result.Problems) != 0 {
 		t.Fatalf("problems = %v", result.Problems)
+	}
+}
+
+func TestScanReadsSecretMetadataOnlyByDefault(t *testing.T) {
+	secret := tlsSecret("payments", "db-tls", map[string][]byte{
+		"tls.crt": []byte("certificate-data-not-allowed"),
+		"tls.key": []byte(keyMaterial),
+	}, map[string]string{"scadenza.io/owner": "team-pay"})
+	secret.Annotations = map[string]string{certificateNameAnnotation: "db"}
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "payments"}}
+	owners, ownerErr := owner.ParseConfig(nil)
+	if ownerErr != nil {
+		t.Fatal(ownerErr)
+	}
+	typedClient := k8sfake.NewSimpleClientset(secret, namespace)
+	listedSecrets := false
+	typedClient.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		listedSecrets = true
+		return true, nil, errors.New("Secret data must not be listed")
+	})
+	scanner := New(Clients{
+		Kubernetes: typedClient,
+		Metadata:   metadataFor(t, secret),
+		Dynamic: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+			schemeWithCertManager(), certManagerListKinds(),
+		),
+	}, Options{Clock: clock.Fixed{Time: testNow}, Owners: owners})
+
+	result, err := scanner.Scan(context.Background())
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if listedSecrets {
+		t.Fatal("default scan listed full Secrets")
+	}
+	if len(result.Certificates) != 1 {
+		t.Fatalf("certificates = %+v", result.Certificates)
+	}
+	certificate := result.Certificates[0]
+	if certificate.Fingerprint != "" || certificate.Serial != "" || len(certificate.Names) != 0 ||
+		!certificate.NotBefore.IsZero() || !certificate.NotAfter.IsZero() || certificate.Public != nil {
+		t.Fatalf("metadata-only entry contains certificate data: %+v", certificate)
+	}
+	if len(certificate.Observations) != 1 {
+		t.Fatalf("observations = %+v", certificate.Observations)
+	}
+	observation := certificate.Observations[0]
+	if observation.Source != SourceSecretMetadata || observation.Location != "payments/db-tls" ||
+		observation.Kubernetes == nil || observation.Kubernetes.Name != "db-tls" ||
+		observation.Kubernetes.Namespace != "payments" ||
+		observation.Kubernetes.CertificateName != "db" {
+		t.Fatalf("metadata observation = %+v", observation)
+	}
+	if len(certificate.Owners) != 1 || certificate.Owners[0].Value != "team-pay" {
+		t.Fatalf("owners = %+v", certificate.Owners)
+	}
+	encoded, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if strings.Contains(string(encoded), keyMaterial) || strings.Contains(string(encoded), "certificate-data-not-allowed") {
+		t.Fatalf("Secret data leaked: %s", encoded)
+	}
+}
+
+func TestScanBuildsCertificateFromCertManagerStatusByDefault(t *testing.T) {
+	certificate := certificateObject("payments", "api", map[string]any{
+		"secretName":  "api-tls",
+		"dnsNames":    []any{"api.example.com", "www.example.com"},
+		"duration":    "2160h",
+		"renewBefore": "720h",
+		"issuerRef":   map[string]any{"name": "production", "kind": ClusterIssuerKind},
+	}, map[string]any{
+		"notBefore":   "2026-01-01T00:00:00Z",
+		"notAfter":    "2026-04-01T00:00:00Z",
+		"renewalTime": "2026-03-01T00:00:00Z",
+		"conditions":  []any{map[string]any{"type": "Ready", "status": "True", "reason": "Ready"}},
+	})
+	owners, err := owner.ParseConfig(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner := New(Clients{
+		Kubernetes: k8sfake.NewSimpleClientset(),
+		Metadata:   metadataFor(t),
+		Dynamic: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+			schemeWithCertManager(), certManagerListKinds(), certificate,
+		),
+	}, Options{Clock: clock.Fixed{Time: testNow}, Owners: owners})
+
+	result, scanErr := scanner.Scan(context.Background())
+	if scanErr != nil {
+		t.Fatalf("Scan: %v", scanErr)
+	}
+	if len(result.Certificates) != 1 {
+		t.Fatalf("certificates = %+v", result.Certificates)
+	}
+	got := result.Certificates[0]
+	if got.Fingerprint != "" || got.DedupKey != "cert-manager/payments/api" ||
+		!slices.Equal(got.Names, []string{"api.example.com", "www.example.com"}) ||
+		got.NotBefore.Format(time.RFC3339) != "2026-01-01T00:00:00Z" ||
+		got.NotAfter.Format(time.RFC3339) != "2026-04-01T00:00:00Z" {
+		t.Fatalf("status certificate = %+v", got)
+	}
+	facts := got.Observations[0].Kubernetes
+	if facts == nil || facts.NotBefore != "2026-01-01T00:00:00Z" || facts.NotAfter != "2026-04-01T00:00:00Z" {
+		t.Fatalf("status facts = %+v", facts)
+	}
+}
+
+func TestScanContinuesWhenSecretMetadataIsForbidden(t *testing.T) {
+	metadataClient := metadataFor(t)
+	metadataClient.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("denied"))
+	})
+	scanner := New(Clients{
+		Kubernetes: k8sfake.NewSimpleClientset(),
+		Metadata:   metadataClient,
+		Dynamic: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+			schemeWithCertManager(), certManagerListKinds(),
+		),
+	}, Options{})
+
+	result, err := scanner.Scan(context.Background())
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(result.Problems) != 1 || result.Problems[0].Code != CodeForbidden || result.Problems[0].Resource != "secrets" {
+		t.Fatalf("problems = %+v", result.Problems)
 	}
 }
 

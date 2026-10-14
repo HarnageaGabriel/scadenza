@@ -3,6 +3,8 @@ package kube
 import (
 	"context"
 	"strconv"
+	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -196,10 +198,20 @@ func certificateFact(object *unstructured.Unstructured, index issuerIndex) (mana
 	issuerType, server := index.resolve(namespace, stringKey(ref, "group"), kind, issuerName)
 	status, _ := nestedMap(object, "status")
 	ready, reason := readyCondition(status)
+	notBeforeValue := stringKey(status, "notBefore")
+	notAfterValue := stringKey(status, "notAfter")
+	names := nestedStrings(spec, "dnsNames")
 	return managerFact{
 		namespace:  namespace,
 		name:       name,
 		secretName: secretName,
+		certificate: Certificate{
+			DedupKey:  "cert-manager/" + namespace + "/" + name,
+			Names:     names,
+			Issuer:    kind + "/" + issuerName,
+			NotBefore: parseStatusTime(notBeforeValue),
+			NotAfter:  parseStatusTime(notAfterValue),
+		},
 		observation: Observation{
 			Source:   SourceCertManager,
 			Location: namespace + "/" + name + " -> " + secretName,
@@ -216,13 +228,39 @@ func certificateFact(object *unstructured.Unstructured, index issuerIndex) (mana
 				Duration:              stringKey(spec, "duration"),
 				RenewBefore:           stringKey(spec, "renewBefore"),
 				RenewBeforePercentage: numberKey(spec, "renewBeforePercentage"),
-				NotAfter:              stringKey(status, "notAfter"),
+				NotBefore:             notBeforeValue,
+				NotAfter:              notAfterValue,
 				RenewalTime:           stringKey(status, "renewalTime"),
 				Ready:                 ready,
 				ReadyReason:           reason,
 			},
 		},
 	}, true
+}
+
+func parseStatusTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
+
+func nestedStrings(object map[string]any, key string) []string {
+	raw, ok := object[key].([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		if value, ok := entry.(string); ok && strings.TrimSpace(value) != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 // readyCondition returns the Ready condition status and reason, if present.

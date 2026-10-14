@@ -25,7 +25,7 @@
           "not_after": {"type": "string", "format": "date-time"},
           "lifetime_days": {"type": "integer", "minimum": 0},
           "verdict_100d": {"enum": ["ok", "exceeds", "unknown", "not_applicable"]},
-          "correlation_method": {"enum": ["sha256", "issuer_serial", "unresolved"]},
+          "correlation_method": {"enum": ["sha256", "issuer_serial", "names_and_expiry", "unresolved"]},
           "policy": {
             "type": "object",
             "additionalProperties": false,
@@ -94,7 +94,7 @@
               "additionalProperties": false,
               "required": ["source", "location", "detail"],
               "properties": {
-                "source": {"enum": ["ct-certspotter", "ct-crtsh", "tls", "kube-secret", "cert-manager"]},
+                "source": {"enum": ["ct-certspotter", "ct-crtsh", "tls", "kube-secret", "kube-secret-metadata", "cert-manager"]},
                 "location": {"type": "string"},
                 "detail": {"type": "string"},
                 "kubernetes": {
@@ -113,6 +113,7 @@
                     "duration": {"type": "string"},
                     "renew_before": {"type": "string"},
                     "renew_before_percentage": {"type": "string"},
+                    "status_not_before": {"type": "string"},
                     "status_not_after": {"type": "string"},
                     "status_renewal_time": {"type": "string"},
                     "ready": {"type": "string"},

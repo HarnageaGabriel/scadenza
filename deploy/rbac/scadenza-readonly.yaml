@@ -3,13 +3,17 @@
 # scadenza only ever issues list and get. It never watches and never writes, so
 # this ClusterRole grants exactly those verbs and nothing else.
 #
-# Secrets are read cluster-wide because scans may cover every namespace. The
-# API request carries the server-side field selector type=kubernetes.io/tls, so
-# only TLS Secrets are returned, but the RBAC grant itself is still broad.
-# Operators who prefer a narrower scope should replace the ClusterRoleBinding
-# with per-namespace Role and RoleBinding objects that keep the `secrets`,
-# `certificates`, and `issuers` rules and drop `namespaces` and
-# `clusterissuers` (both are cluster-scoped).
+# This is the default `scan --kube` grant: Secret data and even Secret metadata
+# are forbidden. When the metadata list returns 403, scadenza records warning
+# SCD-0015 and continues with cert-manager and namespace observations.
+#
+# VERIFY (2026-10-15): confirmed against
+# https://kubernetes.io/docs/reference/access-authn-authz/authorization/#reviewing-request-fields
+# and the RBAC documentation's description of `list`: RBAC authorizes the
+# request verb, resource, subresource, namespace, and API group, not the
+# response representation, Accept header, or field selector. It therefore
+# cannot distinguish a metadata-only list from a full-object list. Keep
+# `secrets` absent here unless Secret data access is explicitly intended.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -26,9 +30,6 @@ kind: ClusterRole
 metadata:
   name: scadenza-readonly
 rules:
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["list", "get"]
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["list", "get"]

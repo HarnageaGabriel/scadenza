@@ -6,6 +6,7 @@ import (
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -44,7 +45,11 @@ func Load(load LoadOptions, scan Options) (Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create dynamic client: %w", err)
 	}
-	return New(Clients{Kubernetes: kubernetesClient, Dynamic: dynamicClient}, scan), nil
+	metadataClient, err := metadata.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create metadata client: %w", err)
+	}
+	return New(Clients{Kubernetes: kubernetesClient, Metadata: metadataClient, Dynamic: dynamicClient}, scan), nil
 }
 
 // restConfig resolves the REST configuration without ever surfacing credentials.
