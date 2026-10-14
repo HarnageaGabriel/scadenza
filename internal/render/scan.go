@@ -86,15 +86,15 @@ func writeScanTable(writer io.Writer, document ScanDocument) error {
 	}
 	for _, certificate := range document.Certificates {
 		if _, err := fmt.Fprintf(certificates, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			displayFingerprint(certificate.Fingerprint),
-			certificate.Serial,
+			sanitizeCell(displayFingerprint(certificate.Fingerprint)),
+			sanitizeCell(certificate.Serial),
 			certificate.LifetimeDays,
-			certificate.Verdict100D,
+			sanitizeCell(certificate.Verdict100D),
 			publicText(certificate.Public),
-			displayObservations(certificate.Observations),
-			certificate.Issuer,
-			displayNames(certificate.Names),
-			displayOwners(certificate.Owners),
+			sanitizeCell(displayObservations(certificate.Observations)),
+			sanitizeCell(certificate.Issuer),
+			sanitizeCell(displayNames(certificate.Names)),
+			sanitizeCell(displayOwners(certificate.Owners)),
 		); err != nil {
 			return err
 		}
@@ -110,7 +110,12 @@ func writeScanTable(writer io.Writer, document ScanDocument) error {
 		return err
 	}
 	for _, finding := range document.Findings {
-		if _, err := fmt.Fprintf(findings, "%s\t%s\t%s\t%s\n", finding.Kind, displayFingerprint(finding.Fingerprint), displayNames(finding.Names), finding.Detail); err != nil {
+		if _, err := fmt.Fprintf(findings, "%s\t%s\t%s\t%s\n",
+			sanitizeCell(finding.Kind),
+			sanitizeCell(displayFingerprint(finding.Fingerprint)),
+			sanitizeCell(displayNames(finding.Names)),
+			sanitizeCell(finding.Detail),
+		); err != nil {
 			return err
 		}
 	}

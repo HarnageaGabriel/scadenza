@@ -156,3 +156,38 @@ func TestCTDiagnosticMatchesPublishedSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestCTTableStripsControlCharacters(t *testing.T) {
+	value := false
+	certificate := ct.Certificate{
+		Fingerprint: "abc",
+		Serial:      "1\x1b[2J",
+		SubjectNames: []string{
+			"evil\x1b[31m.example.com",
+			"a\nb.example.com",
+		},
+		Issuer:       "\x1b]0;pwned\x07CN=CA",
+		NotBefore:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		LifetimeDays: 90,
+		Verdict100D:  "ok",
+		Revoked:      &value,
+		Source:       "test",
+	}
+	document := CTDocument{SchemaVersion: "scadenza.ct/v1", Domain: "example.com", GeneratedAt: certificate.NotBefore, SourcesUsed: []string{"test"}, Certificates: []ct.Certificate{certificate}}
+	var output bytes.Buffer
+	if err := CT(&output, "table", document); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	for _, bad := range []string{"\x1b", "\x07"} {
+		if strings.Contains(rendered, bad) {
+			t.Fatalf("table output contains control character %q:\n%s", bad, rendered)
+		}
+	}
+	for _, want := range []string{"evil[31m.example.com", "ab.example.com", "1[2J", "]0;pwnedCN=CA"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("stripped output missing %q:\n%s", want, rendered)
+		}
+	}
+}

@@ -72,9 +72,25 @@ func TestCorrelateDiffCategories(t *testing.T) {
 			wantKinds: []string{KindNotChecked},
 		},
 		{
+			name:      "san of another host is not observed",
+			domains:   []string{"example.com"},
+			ct:        []ct.Certificate{{Fingerprint: "dd", SubjectNames: []string{"www.example.com"}, Issuer: "CN=CA", NotBefore: date(1, time.January), NotAfter: date(2, time.April), Source: "certspotter", DedupKey: "11"}},
+			live:      []tlsprobe.Result{{Host: "example.com", Port: 443, Fingerprint: "ee", Names: []string{"example.com", "www.example.com"}, Issuer: "CN=Other", NotBefore: date(1, time.January), NotAfter: date(2, time.April), Trusted: true}},
+			wantKinds: []string{KindLiveOnly, KindNotChecked},
+		},
+		{
 			name:      "unknown without fingerprint or serial",
 			domains:   []string{"example.com"},
 			ct:        []ct.Certificate{{SubjectNames: []string{"x.example.com"}, Issuer: "CN=CA", NotBefore: date(1, time.January), NotAfter: date(2, time.April), Source: "crtsh", DedupKey: "6"}},
+			wantKinds: []string{KindUnknown},
+		},
+		{
+			// An expired record that also lacks a fingerprint and serial is
+			// unknown, not not_checked: the correlation check precedes the
+			// deferral rules. See docs/cli/scan.md.
+			name:      "unknown precedes expired deferral",
+			domains:   []string{"example.com"},
+			ct:        []ct.Certificate{{SubjectNames: []string{"old.example.com"}, Issuer: "CN=CA", NotBefore: date(1, time.January), NotAfter: date(5, time.January), Source: "crtsh", DedupKey: "12"}},
 			wantKinds: []string{KindUnknown},
 		},
 		{

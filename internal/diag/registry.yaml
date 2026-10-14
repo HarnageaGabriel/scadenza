@@ -58,7 +58,7 @@ codes:
     slug: tls-probe-failed
     severity: warning
     summary: TLS probe failed
-    explanation: A TLS handshake could not be completed. The detail names the host and the failure class, one of dns, connect-timeout, refused, tls-alert, no-certificate, or handshake-failed.
+    explanation: A TLS handshake could not be completed. The detail names the host and the failure class, one of dns, connect-timeout, refused, canceled, tls-alert, no-certificate, or handshake-failed.
     remediation: Check the host name, network reachability, and whether the endpoint serves TLS on the probed port.
   - code: SCD-0011
     slug: certificate-not-trusted

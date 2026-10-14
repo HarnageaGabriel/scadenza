@@ -60,7 +60,8 @@ func writeCSV(writer io.Writer, certificates []ct.Certificate) error {
 
 // csvSafe neutralizes spreadsheet formula injection by prefixing a single quote.
 func csvSafe(value string) string {
-	if value != "" && strings.ContainsRune("=+-@	", rune(value[0])) {
+	if value != "" && strings.ContainsRune("=+-@	
+", rune(value[0])) {
 		return "'" + value
 	}
 	return value
@@ -76,7 +77,18 @@ func writeTable(writer io.Writer, certificates []ct.Certificate) error {
 		if certificate.Revoked != nil {
 			revoked = fmt.Sprint(*certificate.Revoked)
 		}
-		if _, err := fmt.Fprintf(table, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", certificate.NotBefore.Format("2006-01-02"), certificate.NotAfter.Format("2006-01-02"), certificate.LifetimeDays, certificate.Verdict100D, certificate.Fingerprint, certificate.Serial, revoked, certificate.Issuer, displayNames(certificate.SubjectNames), certificate.Source); err != nil {
+		if _, err := fmt.Fprintf(table, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			certificate.NotBefore.Format("2006-01-02"),
+			certificate.NotAfter.Format("2006-01-02"),
+			certificate.LifetimeDays,
+			sanitizeCell(certificate.Verdict100D),
+			sanitizeCell(certificate.Fingerprint),
+			sanitizeCell(certificate.Serial),
+			revoked,
+			sanitizeCell(certificate.Issuer),
+			sanitizeCell(displayNames(certificate.SubjectNames)),
+			sanitizeCell(certificate.Source),
+		); err != nil {
 			return err
 		}
 	}

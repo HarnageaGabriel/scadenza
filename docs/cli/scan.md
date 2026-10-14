@@ -20,10 +20,11 @@ explicitly given domain. There is no IP-range scanning and no DNS enumeration
 beyond resolving the host names that are actually probed.
 
 Wildcard names (`*.example.com`) are never probed. They are listed in
-`unresolved` with reason `wildcard` and reported as `SCD-0008`. Names beyond the
-`--max-hosts` cap (default 200) are listed in `unresolved` with reason
-`host-cap` and reported as `SCD-0009`; the remaining hosts are simply not
-probed.
+`unresolved` with reason `wildcard` and reported as `SCD-0008`. Explicitly named
+targets (`--host`, `--hosts-file`, and `--domain`) are always probed; the
+`--max-hosts` cap (default 200) only ever trims CT-derived hosts. Trimmed
+derived names are listed in `unresolved` with reason `host-cap` and reported as
+`SCD-0009`; the remaining hosts are simply not probed.
 
 ## Options
 
@@ -100,25 +101,34 @@ exact, unrounded validity duration, as in `scadenza ct`.
 Findings are deterministic and sorted. The kinds are:
 
 - `matched` - both issued in CT and presented live.
-- `ct_only` - still valid in CT and not presented by any probed host, compared
-  only over names that were actually probed.
 - `live_only` - presented by a probed host but absent from CT; the detail is
   marked `private_or_untrusted` when the chain did not verify.
-- `not_checked` - undecidable, for example a wildcard name, an unprobed or
-  failed probe name, or a certificate that already expired.
-- `unknown` - no fingerprint or serial number, so it cannot be correlated.
-- `exceeds-100d` - the certificate validity exceeds 100 days.
+- `unknown` - the CT record carries neither a fingerprint nor a serial number,
+  so it cannot be correlated with anything. This is decided before the deferral
+  rule below, so such a record is `unknown` even when it is expired.
+- `not_checked` - the comparison was deferred: the certificate already expired,
+  no in-scope name was probed, or a relevant name was not observed live as
+  served by that host (unprobed, over the cap, a wildcard, or a failed probe).
+- `ct_only` - still valid in CT, and every in-scope name is a host that was
+  probed and answered live without presenting this certificate. A name seen only
+  as a SAN on another host's certificate was never probed, so it makes the
+  certificate `not_checked`, never `ct_only`.
+- `exceeds-100d` - the certificate validity exceeds 100 days; emitted in
+  addition to the kind above.
 - `kube_only` - read from Kubernetes and not observed in CT or a live handshake.
 
-Never infer: anything undecidable is `not_checked` or `unknown`.
+Never infer: a comparison the evidence cannot settle is `not_checked`, and a
+record that cannot be correlated at all is `unknown`.
 
 ## Exit codes
 
 `0` when no `ct_only`, `live_only`, or `exceeds-100d` finding exists (matched,
 `not_checked`, and `kube_only` findings do not affect the exit status). `3` when
-one of those findings exists. `4` only when at least one source was requested and
-every requested source was unavailable; partial failures are warnings. `2` on
-usage errors. See [exit codes](../exit-codes.md).
+one of those findings exists. `4` only when at least one external source
+(Certificate Transparency or Kubernetes) was requested and every requested one
+was unavailable; a failed TLS probe is a `probe_errors` entry, never exit 4, and
+partial failures are warnings. `2` on usage errors. See
+[exit codes](../exit-codes.md).
 
 ## Output
 

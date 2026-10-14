@@ -154,6 +154,14 @@ func TestScanGoldenDiagnosticsAndUnresolved(t *testing.T) {
 // testNowScan fixes wall-clock time so certificate lifetimes and verification are deterministic.
 var testNowScan = time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
+// loopbackResolver resolves every host name to the loopback address without
+// touching DNS, so probe tests stay hermetic.
+type loopbackResolver struct{}
+
+func (loopbackResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+}
+
 // selfSignedLeaf builds a self-signed leaf certificate for the loopback address.
 func selfSignedLeaf(t *testing.T, names []string, lifetime time.Duration) tls.Certificate {
 	t.Helper()
@@ -221,11 +229,14 @@ func TestScanAgainstLocalTLS(t *testing.T) {
 	expected := hex.EncodeToString(fingerprint[:])
 
 	// The CT record repeats the exact live fingerprint, so the certificate must
-	// correlate as matched. --max-hosts 1 keeps the apex, which needs DNS, out.
+	// correlate as matched. The apex "example.com" is an explicit target, so it
+	// is probed (never trimmed by --max-hosts) and resolved to loopback instead
+	// of performing a real DNS lookup.
 	body := fmt.Sprintf(`[{"id":"1","cert_sha256":"%s","dns_names":["example.com"],"issuer":{"name":"CN=Loopback"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-04-01T00:00:00Z","revoked":false}]`, expected)
 	server := certSpotterServer(t, body)
+	prober := &tlsprobe.Prober{Timeout: 3 * time.Second, Clock: clock.Fixed{Time: testNowScan}, Resolver: loopbackResolver{}}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--host", "127.0.0.1:" + strconv.Itoa(port), "--max-hosts", "1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, &tlsprobe.Prober{Timeout: 3 * time.Second, Clock: clock.Fixed{Time: testNowScan}}))
+	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -236,7 +247,7 @@ func TestScanAgainstLocalTLS(t *testing.T) {
 	// The same live server without CT is a live-only finding.
 	stdout.Reset()
 	stderr.Reset()
-	code = execute([]string{"scan", "--from-ct=false", "--host", "127.0.0.1:" + strconv.Itoa(port), "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, &tlsprobe.Prober{Timeout: 3 * time.Second, Clock: clock.Fixed{Time: testNowScan}}))
+	code = execute([]string{"scan", "--from-ct=false", "--host", "127.0.0.1:" + strconv.Itoa(port), "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
 	if code != ExitFindingsPresent || !strings.Contains(stdout.String(), `"kind":"live_only"`) || !strings.Contains(stdout.String(), "private_or_untrusted") {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -260,24 +271,52 @@ func TestScanExitCodesAndValidation(t *testing.T) {
 		}
 	}
 
-	// Every source unavailable: CT fails and the only probed host is refused.
+	// Every external source unavailable: both CT sources fail. The document is
+	// still rendered (including probe_errors) before exit 4 is returned, and a
+	// fallback that never succeeded is not reported.
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusBadGateway)
 	}))
 	defer server.Close()
+	prober := &tlsprobe.Prober{Timeout: 3 * time.Second, Clock: clock.Fixed{Time: testNowScan}, Resolver: loopbackResolver{}}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--host", "127.0.0.1:1", "--max-hosts", "1"}, &stdout, &stderr, scanDependencies(server.URL, &tlsprobe.Prober{Timeout: 3 * time.Second, Clock: clock.Fixed{Time: testNowScan}}))
+	code := execute([]string{"scan", "--domain", "example.com", "--host", "127.0.0.1:1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
 	if code != ExitSourceUnavailable {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "SCD-0002") {
 		t.Fatalf("expected SCD-0002 in %s", stderr.String())
 	}
+	if strings.Contains(stderr.String(), "SCD-0007") {
+		t.Fatalf("unexpected fallback diagnostic when every source failed: %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"schema_version"`) || !strings.Contains(stdout.String(), "probe_errors") {
+		t.Fatalf("document was not rendered before exit 4: %q", stdout.String())
+	}
+
+	// With --from-ct=false no external source was selected, so a total probe
+	// failure is not exit 4: the document is still rendered and the code follows
+	// the findings.
+	stdout.Reset()
+	stderr.Reset()
+	code = execute([]string{"scan", "--from-ct=false", "--host", "127.0.0.1:1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
+	if code != ExitOK {
+		t.Fatalf("exit = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "probe_errors") {
+		t.Fatalf("expected probe_errors in %q", stdout.String())
+	}
 }
 
 func TestScanWildcardAndHostCap(t *testing.T) {
-	wildcard := fmt.Sprintf(`[{"id":"1","cert_sha256":"%s","dns_names":["*.example.com"],"issuer":{"name":"CN=CA"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-04-01T00:00:00Z","revoked":false}]`, strings.Repeat("c", 64))
-	server := certSpotterServer(t, wildcard)
+	// A wildcard plus two derived names capped to one: the wildcard is never
+	// probed and the alphabetically last derived name is dropped as host-cap.
+	body := fmt.Sprintf(`[
+{"id":"1","cert_sha256":"%s","dns_names":["*.example.com"],"issuer":{"name":"CN=CA"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-04-01T00:00:00Z","revoked":false},
+{"id":"2","cert_sha256":"%s","dns_names":["api.example.com"],"issuer":{"name":"CN=CA"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-04-01T00:00:00Z","revoked":false},
+{"id":"3","cert_sha256":"%s","dns_names":["shop.example.com"],"issuer":{"name":"CN=CA"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-04-01T00:00:00Z","revoked":false}
+]`, strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64))
+	server := certSpotterServer(t, body)
 	var stdout, stderr bytes.Buffer
 	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--host", "127.0.0.1:1", "--max-hosts", "1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, fakeProber{failures: map[string]tlsprobe.ErrorClass{"127.0.0.1:1": tlsprobe.ClassRefused}}))
 	if code != ExitOK {
@@ -293,16 +332,72 @@ func TestScanWildcardAndHostCap(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
 		t.Fatal(err)
 	}
+	byReason := map[string]string{}
 	reasons := map[string]bool{}
 	for _, unresolved := range document.Unresolved {
 		reasons[unresolved.Reason] = true
+		byReason[unresolved.Name] = unresolved.Reason
 	}
 	if !reasons["wildcard"] || !reasons["host-cap"] {
 		t.Fatalf("unresolved = %v", document.Unresolved)
 	}
-	if len(document.Findings) != 1 || document.Findings[0].Kind != "not_checked" {
-		t.Fatalf("findings = %v", document.Findings)
+	if byReason["shop.example.com"] != "host-cap" || byReason["api.example.com"] != "" {
+		t.Fatalf("capped hosts = %v", document.Unresolved)
 	}
+	if len(document.Findings) == 0 {
+		t.Fatal("expected findings")
+	}
+	for _, finding := range document.Findings {
+		if finding.Kind != "not_checked" {
+			t.Fatalf("finding %v is not not_checked", finding)
+		}
+	}
+}
+
+// TestScanMaxHostsKeepsExplicitTargets proves that --max-hosts trims only
+// Certificate Transparency derived hosts and never an explicitly named target.
+func TestScanMaxHostsKeepsExplicitTargets(t *testing.T) {
+	body := fmt.Sprintf(`[
+{"id":"1","cert_sha256":"%s","dns_names":["d.example.com"],"issuer":{"name":"CN=CA"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-04-01T00:00:00Z","revoked":false},
+{"id":"2","cert_sha256":"%s","dns_names":["e.example.com"],"issuer":{"name":"CN=CA"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-04-01T00:00:00Z","revoked":false},
+{"id":"3","cert_sha256":"%s","dns_names":["f.example.com"],"issuer":{"name":"CN=CA"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-04-01T00:00:00Z","revoked":false}
+]`, strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 64))
+	server := certSpotterServer(t, body)
+	var stdout, stderr bytes.Buffer
+	// The explicit host sorts after every derived name, so it would be dropped
+	// first if the cap were applied to the whole target list.
+	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--host", "zzz.example.test:1", "--max-hosts", "1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, fakeProber{failures: map[string]tlsprobe.ErrorClass{"zzz.example.test:1": tlsprobe.ClassRefused}}))
+	if code != ExitOK {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+	}
+	var document struct {
+		Unresolved  []inventory.Unresolved `json:"unresolved"`
+		ProbeErrors []inventory.ProbeError `json:"probe_errors"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	if !probedHost(document.ProbeErrors, "zzz.example.test") {
+		t.Fatalf("explicit target was displaced by --max-hosts: %v", document.ProbeErrors)
+	}
+	capped := map[string]bool{}
+	for _, unresolved := range document.Unresolved {
+		if unresolved.Reason == "host-cap" {
+			capped[unresolved.Name] = true
+		}
+	}
+	if len(capped) != 2 || !capped["e.example.com"] || !capped["f.example.com"] {
+		t.Fatalf("host-cap names = %v", document.Unresolved)
+	}
+}
+
+func probedHost(probeErrors []inventory.ProbeError, host string) bool {
+	for _, probeError := range probeErrors {
+		if probeError.Host == host {
+			return true
+		}
+	}
+	return false
 }
 
 func TestScanHostsFileAndFuzz(t *testing.T) {
@@ -578,5 +673,58 @@ func TestScanKubePassesNamespacesAndRate(t *testing.T) {
 	}
 	if keys := options.Owners.LabelKeys(); len(keys) != 1 || keys[0] != "scadenza.io/owner" {
 		t.Fatalf("default label keys = %v", keys)
+	}
+}
+
+// TestParseHostsFileStripsBOM proves a UTF-8 BOM at the start of the file does
+// not become part of the first host name.
+func TestParseHostsFileStripsBOM(t *testing.T) {
+	hosts, err := parseHostsFile(strings.NewReader("\ufeffexample.com\n# comment\napi.example.com\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 2 || hosts[0] != "example.com" || hosts[1] != "api.example.com" {
+		t.Fatalf("hosts = %v", hosts)
+	}
+}
+
+// TestDeriveHostsUsesConfiguredPort proves CT-derived hosts are probed on the
+// configured --port instead of a hardcoded 443.
+func TestDeriveHostsUsesConfiguredPort(t *testing.T) {
+	records := []ct.Certificate{{SubjectNames: []string{"www.example.com", "*.example.com", "other.test"}}}
+	targets, wildcards := deriveHosts(records, []string{"example.com"}, 8443)
+	if len(targets) != 1 || targets[0].host != "www.example.com" || targets[0].port != 8443 {
+		t.Fatalf("targets = %+v", targets)
+	}
+	if len(wildcards) != 1 || wildcards[0] != "*.example.com" {
+		t.Fatalf("wildcards = %v", wildcards)
+	}
+}
+
+// TestScanFallbackDiagnosticOnlyAfterSuccess proves SCD-0007 is emitted when the
+// first selected CT source fails and the next one answers, and (in
+// TestScanExitCodesAndValidation) that it is not emitted when every source
+// fails.
+func TestScanFallbackDiagnosticOnlyAfterSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.Contains(request.URL.Path, "cert") {
+			writer.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = writer.Write([]byte(crtSHOne))
+	}))
+	defer server.Close()
+	dependencies := testCTDependencies(server.URL+"/cert", server.URL+"/crt")
+	dependencies.prober = fakeProber{}
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter,crtsh", "--host", "127.0.0.1:1", "--format", "json"}, &stdout, &stderr, dependencies)
+	if code == ExitSourceUnavailable {
+		t.Fatalf("a successful fallback must not be exit 4; stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "SCD-0002") {
+		t.Fatalf("expected the failed source diagnostic: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "SCD-0007") {
+		t.Fatalf("expected the fallback diagnostic after the fallback succeeded: %s", stderr.String())
 	}
 }

@@ -8,4 +8,4 @@
 | 1 | An unexpected internal error occurred. |
 | 2 | Command-line usage or input was invalid. |
 | 3 | Findings are present: at least one `ct_only`, `live_only`, or `exceeds-100d` finding was reported by `scadenza scan`. |
-| 4 | Every requested source was unavailable (`scadenza ct`, `scadenza scan`). `scadenza scan` exits 4 only when at least one source was requested and every requested source failed; a partial failure (for example an unreachable Kubernetes cluster while Certificate Transparency still answered) is a warning, not exit 4. |
+| 4 | Every requested source was unavailable (`scadenza ct`, `scadenza scan`). `scadenza scan` exits 4 only when at least one external source (Certificate Transparency or Kubernetes) was requested and every requested one failed (a failed TLS probe is a `probe_errors` entry, not exit 4); a partial failure (for example an unreachable Kubernetes cluster while Certificate Transparency still answered) is a warning, not exit 4. |

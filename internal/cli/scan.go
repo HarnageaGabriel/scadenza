@@ -99,13 +99,20 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				emitDiagnostic(stderr, "SCD-0001", "supply at least one --domain, --host, --hosts-file, or --kube")
 				return &commandError{code: ExitUsageError}
 			}
-			targets, err := parseTargets(append(append([]string{}, hosts...), fileTokens...), port)
+			explicitTargets, err := parseTargets(append(append([]string{}, hosts...), fileTokens...), port)
 			if err != nil {
 				emitDiagnostic(stderr, "SCD-0001", err.Error())
 				return &commandError{code: ExitUsageError}
 			}
 			for _, domain := range normalizedDomains {
-				targets = append(targets, probeTarget{host: domain, port: port})
+				explicitTargets = append(explicitTargets, probeTarget{host: domain, port: port})
+			}
+			// Explicitly named targets are never displaced by --max-hosts, so
+			// they are kept first and the cap only ever trims derived hosts.
+			targets := dedupeTargets(explicitTargets)
+			explicitNames := map[string]bool{}
+			for _, target := range targets {
+				explicitNames[target.host+":"+strconv.Itoa(target.port)] = true
 			}
 			chosen, err := resolveSources(sourceNames, dependencies.sources)
 			if err != nil {
@@ -154,9 +161,17 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			ctAvailable := false
 			if fromCT && len(normalizedDomains) > 0 {
 				for _, domain := range normalizedDomains {
-					for index, source := range chosen {
+					var failed []string
+					for _, source := range chosen {
 						found, searchErr := source.Search(command.Context(), ct.Query{Domain: domain, IncludeSubdomains: true, Now: now})
 						if searchErr == nil {
+							// Record the fallback only now that the next source
+							// actually answered; a failed fallback is not a fallback.
+							if len(failed) > 0 {
+								previous := failed[len(failed)-1]
+								diagnostics.add("SCD-0007", previous)
+								emitDiagnostic(stderr, "SCD-0007", previous+" -> "+source.Name())
+							}
 							records = append(records, found...)
 							usedCT[source.Name()] = true
 							ctAvailable = true
@@ -165,29 +180,30 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 						code := sourceErrorCode(searchErr)
 						diagnostics.add(code, source.Name())
 						emitDiagnostic(stderr, code, source.Name())
-						if index < len(chosen)-1 {
-							diagnostics.add("SCD-0007", source.Name())
-							emitDiagnostic(stderr, "SCD-0007", source.Name()+" -> "+chosen[index+1].Name())
-						}
+						failed = append(failed, source.Name())
 					}
 				}
-				derived, wildcards := deriveHosts(records, normalizedDomains)
-				targets = append(targets, derived...)
+				derived, wildcards := deriveHosts(records, normalizedDomains, port)
+				available := make([]probeTarget, 0, len(derived))
+				for _, target := range dedupeTargets(derived) {
+					if !explicitNames[target.host+":"+strconv.Itoa(target.port)] {
+						available = append(available, target)
+					}
+				}
+				if len(available) > maxHosts {
+					for _, target := range available[maxHosts:] {
+						unprobed[target.host] = "host-cap"
+					}
+					diagnostics.add("SCD-0009", fmt.Sprint(maxHosts))
+					emitDiagnostic(stderr, "SCD-0009", strconv.Itoa(maxHosts))
+					available = available[:maxHosts]
+				}
+				targets = append(targets, available...)
 				for _, name := range wildcards {
 					unprobed[name] = "wildcard"
 					diagnostics.add("SCD-0008", name)
 					emitDiagnostic(stderr, "SCD-0008", name)
 				}
-			}
-
-			targets = dedupeTargets(targets)
-			if len(targets) > maxHosts {
-				for _, target := range targets[maxHosts:] {
-					unprobed[target.host] = "host-cap"
-				}
-				diagnostics.add("SCD-0009", fmt.Sprint(maxHosts))
-				emitDiagnostic(stderr, "SCD-0009", strconv.Itoa(maxHosts))
-				targets = targets[:maxHosts]
 			}
 
 			prober := dependencies.prober
@@ -199,7 +215,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				clone.Timeout = timeout
 				prober = &clone
 			}
-			live, probeErrors, successes := runProbes(command.Context(), prober, targets, concurrency)
+			live, probeErrors, _ := runProbes(command.Context(), prober, targets, concurrency)
 			for _, probeError := range probeErrors {
 				diagnostics.add("SCD-0010", probeError.Host)
 				emitDiagnostic(stderr, "SCD-0010", probeError.Host+":"+strconv.Itoa(probeError.Port)+" "+probeError.Class)
@@ -266,15 +282,17 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				Diagnostics:   diagnostics.items,
 			}
 
+			if err := render.Scan(stdout, format, document); err != nil {
+				return fmt.Errorf("render output: %w", err)
+			}
+			// Exit 4 needs an external data source (Certificate Transparency or
+			// Kubernetes) that was selected and failed entirely. A failed TLS
+			// probe is a probe_errors entry, not an unavailable source.
 			if sourcesUnavailable(
 				sourceState{requested: fromCT && len(normalizedDomains) > 0, available: ctAvailable},
-				sourceState{requested: len(targets) > 0, available: successes > 0},
 				sourceState{requested: kubeRequested, available: kubeAvailable},
 			) {
 				return &commandError{code: ExitSourceUnavailable}
-			}
-			if err := render.Scan(stdout, format, document); err != nil {
-				return fmt.Errorf("render output: %w", err)
 			}
 			for _, finding := range findings {
 				switch finding.Kind {
@@ -310,8 +328,9 @@ type sourceState struct {
 	available bool
 }
 
-// sourcesUnavailable reports whether at least one source was requested and every
-// requested source failed. Partial failures are warnings, never exit code 4.
+// sourcesUnavailable reports whether at least one external data source was
+// requested and every requested one failed. Partial failures are warnings,
+// never exit code 4.
 func sourcesUnavailable(states ...sourceState) bool {
 	requested := false
 	for _, state := range states {
@@ -401,7 +420,7 @@ func parseHostsFile(reader io.Reader) ([]string, error) {
 	result := []string{}
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
-		line := scanner.Text()
+		line := strings.TrimPrefix(scanner.Text(), "\ufeff")
 		if index := strings.IndexByte(line, '#'); index >= 0 {
 			line = line[:index]
 		}
@@ -429,7 +448,7 @@ func parseTargets(values []string, defaultPort int) ([]probeTarget, error) {
 	return result, nil
 }
 
-func deriveHosts(records []ct.Certificate, domains []string) ([]probeTarget, []string) {
+func deriveHosts(records []ct.Certificate, domains []string, defaultPort int) ([]probeTarget, []string) {
 	targets := map[string]probeTarget{}
 	wildcards := map[string]bool{}
 	for _, record := range records {
@@ -448,11 +467,11 @@ func deriveHosts(records []ct.Certificate, domains []string) ([]probeTarget, []s
 			if !underAnyDomain(name, domains) {
 				continue
 			}
-			host, port, err := tlsprobe.ParseEndpoint(name, 443)
+			host, targetPort, err := tlsprobe.ParseEndpoint(name, defaultPort)
 			if err != nil {
 				continue
 			}
-			targets[host+":"+strconv.Itoa(port)] = probeTarget{host: host, port: port}
+			targets[host+":"+strconv.Itoa(targetPort)] = probeTarget{host: host, port: targetPort}
 		}
 	}
 	result := make([]probeTarget, 0, len(targets))

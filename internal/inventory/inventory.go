@@ -298,7 +298,8 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 	return result, findings
 }
 
-// stateLookup indexes observed names, failed probe hosts, and unprobed names.
+// stateLookup indexes the host names that were actually probed (successfully
+// or not) plus the names deliberately left unprobed.
 type stateLookup struct {
 	observed   map[string]bool
 	hostErrors map[string]string
@@ -307,9 +308,12 @@ type stateLookup struct {
 
 func (in Input) stateLookup() stateLookup {
 	lookup := stateLookup{observed: map[string]bool{}, hostErrors: map[string]string{}, unprobed: map[string]string{}}
+	// Only the host that answered counts as observed. A name that merely
+	// appears as a SAN on another host's certificate was never probed, so it
+	// must not be treated as served by this scan.
 	for _, result := range in.Live {
-		for _, name := range result.Names {
-			lookup.observed[normalizeName(name)] = true
+		if normalized := normalizeName(result.Host); normalized != "" {
+			lookup.observed[normalized] = true
 		}
 	}
 	for _, probeError := range in.Errors {

@@ -35,6 +35,8 @@ const (
 	ClassConnectTimeout ErrorClass = "connect-timeout"
 	// ClassRefused means the peer refused the connection.
 	ClassRefused ErrorClass = "refused"
+	// ClassCanceled means the caller canceled the probe.
+	ClassCanceled ErrorClass = "canceled"
 	// ClassTLSAlert means the peer sent a TLS alert or non-TLS data.
 	ClassTLSAlert ErrorClass = "tls-alert"
 	// ClassNoCertificate means the handshake completed without a leaf certificate.
@@ -45,6 +47,10 @@ const (
 
 // errNoCertificate reports a handshake that yielded no leaf certificate.
 var errNoCertificate = errors.New("server presented no certificate")
+
+// systemCertPool loads the platform root pool. It is a variable so the failure
+// path can be exercised without corrupting the real system trust store.
+var systemCertPool = x509.SystemCertPool
 
 // Error is a classified probe failure.
 type Error struct {
@@ -63,6 +69,12 @@ func (e *Error) Unwrap() error { return e.Err }
 // Dialer opens the TCP connection used for a handshake.
 type Dialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+// IPResolver resolves a host name to its IP addresses. *net.Resolver
+// implements it; tests inject a deterministic resolver.
+type IPResolver interface {
+	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
 // Result records what a single handshake observed.
@@ -88,7 +100,7 @@ type Result struct {
 type Prober struct {
 	Timeout  time.Duration
 	Dialer   Dialer
-	Resolver *net.Resolver
+	Resolver IPResolver
 	Roots    *x509.CertPool
 	Clock    clock.Clock
 }
@@ -122,17 +134,21 @@ func (p *Prober) Probe(ctx context.Context, host string, port int, sni string) (
 	if err != nil {
 		return result, &Error{Class: ClassDNS, Host: host, Port: port, Err: err}
 	}
+	if len(addresses) == 0 {
+		return result, &Error{Class: ClassDNS, Host: host, Port: port, Err: errors.New("host resolved to no addresses")}
+	}
 	result.IPs = addresses
 	dialer := p.Dialer
 	if dialer == nil {
 		dialer = &net.Dialer{Timeout: p.Timeout}
 	}
-	connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	connection, err := dialResolved(ctx, dialer, addresses, port)
 	if err != nil {
 		return result, &Error{Class: classifyDial(ctx, err), Host: host, Port: port, Err: err}
 	}
 	defer func() { _ = connection.Close() }()
-	state, err := handshake(ctx, connection, &result, p.roots(), p.now())
+	roots, rootsErr := p.roots()
+	state, err := handshake(ctx, connection, &result, roots, rootsErr, p.now())
 	if err != nil {
 		return result, &Error{Class: classifyHandshake(ctx, err), Host: host, Port: port, Err: err}
 	}
@@ -140,14 +156,35 @@ func (p *Prober) Probe(ctx context.Context, host string, port int, sni string) (
 	return result, nil
 }
 
+// dialResolved connects to the first resolved address that accepts a
+// connection, trying them in order and honouring ctx. It never resolves again,
+// so the address dialed is one of the addresses already recorded.
+func dialResolved(ctx context.Context, dialer Dialer, addresses []string, port int) (net.Conn, error) {
+	var lastErr error
+	for _, address := range addresses {
+		connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(address, strconv.Itoa(port)))
+		if err == nil {
+			return connection, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no address to dial")
+	}
+	return nil, lastErr
+}
+
 // handshake reads the peer chain. In-connection verification is disabled on
 // purpose; capture re-verifies the chain against the system roots separately.
-func handshake(ctx context.Context, connection net.Conn, result *Result, roots *x509.CertPool, now time.Time) (tls.ConnectionState, error) {
+func handshake(ctx context.Context, connection net.Conn, result *Result, roots *x509.CertPool, rootsErr error, now time.Time) (tls.ConnectionState, error) {
 	config := &tls.Config{ServerName: result.SNI}
 	config.InsecureSkipVerify = true //nolint:gosec // G402: the chain must be read from expired, self-signed, or misconfigured servers; capture re-verifies it against the system roots. See docs/adr/0004-tls-verification-policy.md.
 	//nolint:gosec // G123: this is a one-shot client handshake that never resumes a session and re-verifies the chain separately. See docs/adr/0004-tls-verification-policy.md.
 	config.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-		return capture(result, rawCerts, roots, now)
+		return capture(result, rawCerts, roots, rootsErr, now)
 	}
 	client := tls.Client(connection, config)
 	if err := client.HandshakeContext(ctx); err != nil {
@@ -158,7 +195,7 @@ func handshake(ctx context.Context, connection net.Conn, result *Result, roots *
 
 // capture records the leaf fingerprint and separately verifies the chain
 // against the system roots. It returns an error only when no leaf is present.
-func capture(result *Result, rawCerts [][]byte, roots *x509.CertPool, now time.Time) error {
+func capture(result *Result, rawCerts [][]byte, roots *x509.CertPool, rootsErr error, now time.Time) error {
 	if len(rawCerts) == 0 {
 		return errNoCertificate
 	}
@@ -176,14 +213,23 @@ func capture(result *Result, rawCerts [][]byte, roots *x509.CertPool, now time.T
 	result.NotBefore = leaf.NotBefore
 	result.NotAfter = leaf.NotAfter
 	result.ChainHasIntermediate = len(rawCerts) > 1
+	if rootsErr != nil {
+		result.Trusted = false
+		result.VerifyError = "load system roots: " + rootsErr.Error()
+		return nil
+	}
 	options := x509.VerifyOptions{Roots: roots, Intermediates: x509.NewCertPool(), CurrentTime: now}
 	for _, der := range rawCerts[1:] {
 		if parsed, parseErr := x509.ParseCertificate(der); parseErr == nil && options.Intermediates != nil {
 			options.Intermediates.AddCert(parsed)
 		}
 	}
-	if result.SNI != "" && net.ParseIP(result.SNI) == nil {
-		options.DNSName = result.SNI
+	// Trust must mean "valid for the probed name or IP": scope the verification
+	// to the SNI when a name is known, and to the IP literal otherwise, where Go
+	// matches it against the certificate's IP SANs. See ADR 0004.
+	options.DNSName = result.SNI
+	if options.DNSName == "" {
+		options.DNSName = result.Host
 	}
 	if _, verifyErr := leaf.Verify(options); verifyErr != nil {
 		result.Trusted = false
@@ -238,15 +284,15 @@ func (p *Prober) resolve(ctx context.Context, host string) ([]string, error) {
 	return result, nil
 }
 
-func (p *Prober) roots() *x509.CertPool {
+func (p *Prober) roots() (*x509.CertPool, error) {
 	if p.Roots != nil {
-		return p.Roots
+		return p.Roots, nil
 	}
-	pool, err := x509.SystemCertPool()
+	pool, err := systemCertPool()
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return pool
+	return pool, nil
 }
 
 func (p *Prober) now() time.Time {
@@ -257,6 +303,9 @@ func (p *Prober) now() time.Time {
 }
 
 func classifyDial(ctx context.Context, err error) ErrorClass {
+	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		return ClassCanceled
+	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return ClassConnectTimeout
 	}
@@ -268,11 +317,8 @@ func classifyDial(ctx context.Context, err error) ErrorClass {
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return ClassConnectTimeout
 	}
-	if strings.Contains(err.Error(), "refused") {
+	if errors.Is(err, refusedErrno) {
 		return ClassRefused
-	}
-	if errors.Is(err, context.Canceled) {
-		return ClassConnectTimeout
 	}
 	return ClassHandshakeFailed
 }
@@ -281,8 +327,14 @@ func classifyHandshake(ctx context.Context, err error) ErrorClass {
 	if errors.Is(err, errNoCertificate) {
 		return ClassNoCertificate
 	}
+	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		return ClassCanceled
+	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return ClassConnectTimeout
+	}
+	if errors.Is(err, refusedErrno) {
+		return ClassRefused
 	}
 	var alert tls.AlertError
 	if errors.As(err, &alert) {

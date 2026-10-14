@@ -9,11 +9,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -331,6 +333,10 @@ func TestParseEndpoint(t *testing.T) {
 		{name: "ipv6 no port", input: "::1", defaultPort: 443, wantHost: "::1", wantPort: 443},
 		{name: "ipv6 bracket port", input: "[::1]:8443", defaultPort: 443, wantHost: "::1", wantPort: 8443},
 		{name: "ipv6 bracket", input: "[::1]", defaultPort: 443, wantHost: "::1", wantPort: 443},
+		{name: "trailing dot", input: "Example.com.", defaultPort: 443, wantHost: "example.com", wantPort: 443},
+		{name: "trailing dot port", input: "www.example.com.:8443", defaultPort: 443, wantHost: "www.example.com", wantPort: 8443},
+		{name: "control character", input: "exa\x01mple.com", defaultPort: 443, invalid: true},
+		{name: "newline", input: "example.com\n.evil", defaultPort: 443, invalid: true},
 		{name: "scheme", input: "https://example.com", defaultPort: 443, invalid: true},
 		{name: "path", input: "example.com/path", defaultPort: 443, invalid: true},
 		{name: "wildcard", input: "*.example.com", defaultPort: 443, invalid: true},
@@ -382,5 +388,120 @@ func TestTLSVersionName(t *testing.T) {
 		if got := tlsVersionName(version); got != want {
 			t.Fatalf("tlsVersionName(%#x) = %q, want %q", version, got, want)
 		}
+	}
+}
+
+// countingResolver records how many times it resolves a name so a test can prove
+// the probe dials the addresses it already resolved instead of resolving again.
+type countingResolver struct {
+	mu    sync.Mutex
+	calls int
+	ip    net.IP
+}
+
+func (r *countingResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	return []net.IPAddr{{IP: r.ip}}, nil
+}
+
+func (r *countingResolver) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// TestProbeDialsResolvedAddresses proves the probe connects to the address the
+// injected resolver returned, records that address as Result.IPs, and does not
+// resolve the name a second time. "resolved.test" has no DNS entry, so a second
+// lookup would fail the handshake.
+func TestProbeDialsResolvedAddresses(t *testing.T) {
+	_, _, leaf := signedCertificate(t, leafTemplate([]string{"resolved.test"}, 90*24*time.Hour), nil, nil)
+	host, port := serve(t, &tls.Config{Certificates: []tls.Certificate{leaf}})
+	resolver := &countingResolver{ip: net.ParseIP(host)}
+	prober := &Prober{Clock: clock.Fixed{Time: testNow}, Timeout: 5 * time.Second, Resolver: resolver}
+	result, err := prober.Probe(context.Background(), "resolved.test", port, "resolved.test")
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if len(result.IPs) != 1 || result.IPs[0] != "127.0.0.1" {
+		t.Fatalf("result.IPs = %v, want the dialed address", result.IPs)
+	}
+	if resolver.count() != 1 {
+		t.Fatalf("resolver called %d times, want exactly one resolution", resolver.count())
+	}
+}
+
+// TestProbeIPLiteralChecksIPName proves that an IP-literal probe with no SNI is
+// verified against the IP, so a chain for an unrelated public name is not
+// reported trusted while a certificate carrying the IP SAN is.
+func TestProbeIPLiteralChecksIPName(t *testing.T) {
+	ca, caKey := authority(t)
+	pool := x509.NewCertPool()
+	pool.AddCert(ca)
+	prober := &Prober{Clock: clock.Fixed{Time: testNow}, Timeout: 5 * time.Second, Roots: pool}
+
+	_, _, unrelated := signedCertificate(t, leafTemplate([]string{"unrelated.example.test"}, 90*24*time.Hour), ca, caKey)
+	unrelated.Certificate = append(unrelated.Certificate, ca.Raw)
+	unrelatedHost, unrelatedPort := serve(t, &tls.Config{Certificates: []tls.Certificate{unrelated}})
+	result, err := prober.Probe(context.Background(), unrelatedHost, unrelatedPort, "")
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if result.Trusted {
+		t.Fatalf("chain for unrelated.example.test reported trusted for IP literal %s (verifyError=%q)", unrelatedHost, result.VerifyError)
+	}
+
+	ipTemplate := leafTemplate(nil, 90*24*time.Hour)
+	ipTemplate.IPAddresses = []net.IP{net.ParseIP(unrelatedHost)}
+	_, _, ipLeaf := signedCertificate(t, ipTemplate, ca, caKey)
+	ipLeaf.Certificate = append(ipLeaf.Certificate, ca.Raw)
+	ipHost, ipPort := serve(t, &tls.Config{Certificates: []tls.Certificate{ipLeaf}})
+	trusted, err := prober.Probe(context.Background(), ipHost, ipPort, "")
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if !trusted.Trusted {
+		t.Fatalf("certificate carrying the IP SAN reported untrusted: %q", trusted.VerifyError)
+	}
+}
+
+// TestClassifyErrorsArePortable proves refused connections are matched through
+// the wrapped errno (not a substring of the message) and that cancellation has
+// its own class.
+func TestClassifyErrorsArePortable(t *testing.T) {
+	if got := classifyDial(context.Background(), errors.New("dial tcp: connection refused")); got != ClassHandshakeFailed {
+		t.Fatalf("message-only refused text classified as %v; the class must not come from the message", got)
+	}
+	if got := classifyDial(context.Background(), fmt.Errorf("dial tcp 127.0.0.1:1: %w", refusedErrno)); got != ClassRefused {
+		t.Fatalf("wrapped refused errno classified as %v", got)
+	}
+	if got := classifyHandshake(context.Background(), fmt.Errorf("write: %w", refusedErrno)); got != ClassRefused {
+		t.Fatalf("handshake refused errno classified as %v", got)
+	}
+	if got := classifyDial(context.Background(), context.Canceled); got != ClassCanceled {
+		t.Fatalf("canceled dial classified as %v", got)
+	}
+	if got := classifyHandshake(context.Background(), context.Canceled); got != ClassCanceled {
+		t.Fatalf("canceled handshake classified as %v", got)
+	}
+}
+
+// TestProbeSystemRootsErrorSurfaced proves a SystemCertPool failure is reported
+// in verify_error instead of silently trusting nothing (or everything).
+func TestProbeSystemRootsErrorSurfaced(t *testing.T) {
+	original := systemCertPool
+	systemCertPool = func() (*x509.CertPool, error) { return nil, errors.New("root store unavailable") }
+	t.Cleanup(func() { systemCertPool = original })
+
+	_, _, leaf := signedCertificate(t, leafTemplate([]string{"roots.test"}, 90*24*time.Hour), nil, nil)
+	host, port := serve(t, &tls.Config{Certificates: []tls.Certificate{leaf}})
+	result, err := (&Prober{Clock: clock.Fixed{Time: testNow}, Timeout: 5 * time.Second}).Probe(context.Background(), host, port, "roots.test")
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if result.Trusted || !strings.Contains(result.VerifyError, "root store unavailable") {
+		t.Fatalf("roots error not surfaced: trusted=%v verifyError=%q", result.Trusted, result.VerifyError)
 	}
 }

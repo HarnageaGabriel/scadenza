@@ -290,3 +290,36 @@ func keys(values map[string]json.RawMessage) []string {
 	slices.Sort(result)
 	return result
 }
+
+func TestScanTableStripsControlCharacters(t *testing.T) {
+	yes := true
+	document := ScanDocument{Certificates: []inventory.Certificate{{
+		Fingerprint:  strings.Repeat("a", 64),
+		Serial:       "1b",
+		Names:        []string{"evil\x1b[31m.example.com", "a\nb.example.com"},
+		Issuer:       "\x1b]0;pwned\x07CN=CA",
+		Verdict100D:  "ok",
+		Public:       &yes,
+		Observations: []inventory.Observation{{Source: inventory.SourceTLS, Location: "host:443", Detail: "leaf"}},
+	}}, Findings: []inventory.Finding{{
+		Kind:        inventory.KindCTOnly,
+		Fingerprint: strings.Repeat("a", 64),
+		Names:       []string{"a\nb.example.com"},
+		Detail:      "line1\nline2\x1b[0m",
+	}}}
+	var output bytes.Buffer
+	if err := Scan(&output, "table", document); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	for _, bad := range []string{"\x1b", "\x07", "line1\nline2"} {
+		if strings.Contains(rendered, bad) {
+			t.Fatalf("table output contains %q:\n%s", bad, rendered)
+		}
+	}
+	for _, want := range []string{"evil[31m.example.com", "ab.example.com", "line1line2"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("stripped output missing %q:\n%s", want, rendered)
+		}
+	}
+}
