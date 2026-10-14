@@ -50,7 +50,7 @@ the manual ones before renewals have to happen four times a year.
 It merges sources that existing open-source scanners look at one at a time:
 Certificate Transparency logs (what was issued), live TLS handshakes (what is
 served) and Kubernetes with cert-manager (what is managed). Azure Key Vault is
-next. Certificates are correlated by fingerprint: one certificate, every place
+planned. Certificates are correlated by fingerprint: one certificate, every place
 it appears. scadenza is free software under Apache-2.0 and will stay free.
 
 > [!WARNING]
@@ -132,8 +132,9 @@ exists today.
 | `scadenza ct`: Cert Spotter and crt.sh, table / JSON / CSV | Done | M1 |
 | `scadenza scan`: TLS handshakes with SNI, fingerprint correlation, `ct_only` / `live_only` | Done | M2 |
 | Kubernetes TLS Secrets and cert-manager `Certificate` resources, ownership mapping | Done | M3 |
-| Renewal classification: automatic, manual, unknown | Planned | M4 |
-| Azure Key Vault | Planned | M5 |
+| Reliable results: coverage, `--strict`, `--fail-on`, dated time rules, JSON contract tests | Planned | M4a |
+| Renewal classification with evidence: mode (automatic, manual, unknown) and health | Planned | M4b |
+| Kubernetes without reading Secrets by default; Azure Key Vault | Planned | M5 |
 | Releases: GoReleaser, Homebrew, krew | Planned | M6 / 0.1.0 |
 
 ## How it works
@@ -191,13 +192,18 @@ accepted as a flag and never logged.
 
 ## Roadmap
 
-- **M4, renewal classification.** Automatic (ACME issuer in cert-manager,
-  auto-renew policy in Key Vault), manual or unknown, with the evidence for
-  each answer.
-- **M5, Azure Key Vault.** Certificates and their lifetime actions, with
-  read-only credentials.
+The plan to 0.1.0 is recorded in [ADR 0006](docs/adr/0006-roadmap-to-0.1.0.md).
+
+- **M4a, reliable results.** A partial scan must never look like a clean one:
+  coverage is reported, `--strict` and `--min-coverage` fail incomplete scans,
+  and `--fail-on` chooses which findings fail CI.
+- **M4b, renewal classification.** Automatic, manual or unknown, plus whether
+  automatic renewal is healthy, with the evidence for each answer. Automatic
+  renewal configured in a way that breaks under short lifetimes is a finding.
+- **M5, Kubernetes and cloud.** Kubernetes without reading Secret data by
+  default, then Azure Key Vault with read-only credentials.
 - **M6, 0.1.0.** Binaries built with GoReleaser on GitHub Releases, Homebrew,
-  and a krew plugin.
+  checksums and CI examples.
 
 Out of scope: renewing certificates, passive network capture, a web dashboard
 and expiry calendars for private PKI.

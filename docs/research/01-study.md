@@ -47,10 +47,5 @@ Status: first pass. Items marked `VERIFY:` are not confirmed against an official
 - Wildcards.
 
 ## Proposed milestones
-- M0 Skeleton: cobra CLI, diag registry, version, CI, lint, docs gen, governance files.
-- M1 `scadenza ct <domain>` (the "Prova subito"): crt.sh + Cert Spotter, table/JSON/CSV, fixtures.
-- M2 TLS handshake scanner + correlation by fingerprint.
-- M3 Kubernetes Secrets + cert-manager (kind e2e).
-- M4 Azure Key Vault.
-- M5 Classification + expected-vs-observed diff + owner mapping.
-- M6 Hardening: fuzzing, SARIF if useful, GoReleaser, Homebrew, krew, Scorecard.
+
+Superseded by [ADR 0006](../adr/0006-roadmap-to-0.1.0.md). M0 to M3 are done; next are M4a (reliable results), M4b (renewal classification), M5 (Kubernetes without Secrets by default, Azure Key Vault) and M6 (0.1.0).
