@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -204,20 +205,21 @@ func certificateFact(object *unstructured.Unstructured, index issuerIndex) (mana
 			Location: namespace + "/" + name + " -> " + secretName,
 			Detail:   "cert-manager Certificate; issuer " + kind + "/" + issuerName + " type=" + issuerType,
 			Kubernetes: &Kubernetes{
-				Resource:    CertManagerGroup + "/" + CertManagerVersion + " Certificate",
-				Namespace:   namespace,
-				Name:        name,
-				SecretName:  secretName,
-				IssuerKind:  kind,
-				IssuerName:  issuerName,
-				IssuerType:  issuerType,
-				ACMEServer:  server,
-				Duration:    stringKey(spec, "duration"),
-				RenewBefore: stringKey(spec, "renewBefore"),
-				NotAfter:    stringKey(status, "notAfter"),
-				RenewalTime: stringKey(status, "renewalTime"),
-				Ready:       ready,
-				ReadyReason: reason,
+				Resource:              CertManagerGroup + "/" + CertManagerVersion + " Certificate",
+				Namespace:             namespace,
+				Name:                  name,
+				SecretName:            secretName,
+				IssuerKind:            kind,
+				IssuerName:            issuerName,
+				IssuerType:            issuerType,
+				ACMEServer:            server,
+				Duration:              stringKey(spec, "duration"),
+				RenewBefore:           stringKey(spec, "renewBefore"),
+				RenewBeforePercentage: numberKey(spec, "renewBeforePercentage"),
+				NotAfter:              stringKey(status, "notAfter"),
+				RenewalTime:           stringKey(status, "renewalTime"),
+				Ready:                 ready,
+				ReadyReason:           reason,
 			},
 		},
 	}, true
@@ -249,6 +251,16 @@ func nestedMap(object *unstructured.Unstructured, fields ...string) (map[string]
 		return nil, false
 	}
 	return value, true
+}
+
+// numberKey returns an integer field as decimal text, or an empty string when it
+// is absent or not an integer.
+func numberKey(object map[string]any, key string) string {
+	value, ok, err := unstructured.NestedInt64(object, key)
+	if err != nil || !ok {
+		return ""
+	}
+	return strconv.FormatInt(value, 10)
 }
 
 // stringKey returns a string field, or an empty string when it is absent or not

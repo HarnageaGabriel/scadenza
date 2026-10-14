@@ -149,7 +149,7 @@ func (c Config) Resolve(signals Signals) []Owner {
 func (c Config) matchDomain(names []string) (string, string, bool) {
 	best, bestValue := "", ""
 	for _, name := range names {
-		name = normalizeDomain(name)
+		name = NormalizeDomain(name)
 		if name == "" {
 			continue
 		}
@@ -203,7 +203,7 @@ func normalizeMap(values map[string]string, domains bool) (map[string]string, er
 	for original, value := range values {
 		key := original
 		if domains {
-			key = normalizeDomain(key)
+			key = NormalizeDomain(key)
 		} else {
 			key = strings.ToLower(strings.TrimSpace(key))
 		}
@@ -220,7 +220,12 @@ func normalizeMap(values map[string]string, domains bool) (map[string]string, er
 	return result, nil
 }
 
-func normalizeDomain(value string) string {
+// NormalizeDomain is the shared domain normalizer: it lowercases, trims
+// surrounding whitespace, strips a leading wildcard label, and removes a
+// trailing dot, so a configured key and an observed certificate name turn into
+// the same key. It is used for ownership and renewal keys and for the names
+// they are matched against.
+func NormalizeDomain(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	value = strings.TrimPrefix(value, "*.")
 	return strings.TrimSuffix(value, ".")

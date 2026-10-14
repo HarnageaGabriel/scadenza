@@ -51,7 +51,8 @@ derived names are listed in `unresolved` with reason `host-cap` and reported as
   `ct_only`, `live_only`, `exceeds-100d`, `not-compliant-at-issuance`,
   `renew-before-exceeds-lifetime`, `renewal-degraded`,
   `renew-before-loop-at-next-limit`, `duration-exceeds-next-limit`,
-  `manual-renewal-after-limit`, or `none` alone. Default
+  `manual-renewal-after-limit`, `renewal-config-invalid`, or `none` alone.
+  Default
   `live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded`.
 - `--group-by owner|names|none` (default `none`) groups the table rows by the
   first owner or the first certificate name. It never changes JSON or CSV.
@@ -79,8 +80,9 @@ It also reads cert-manager `Certificate` resources at `cert-manager.io/v1` and
 reports the issuer kind and name, the resolved issuer type (`acme`, `ca`,
 `selfSigned`, `vault`, `venafi`, `external`, or `unknown`, taken only when
 exactly one recognized `spec` key has a map value), the ACME directory server URL, `spec.duration`,
-`spec.renewBefore`, `status.notAfter`, `status.renewalTime`, and the `Ready`
-condition, and the `cert-manager.io/certificate-name` annotation of a TLS
+`spec.renewBefore`, `spec.renewBeforePercentage`, `status.notAfter`,
+`status.renewalTime`, and the `Ready` condition, and the
+`cert-manager.io/certificate-name` annotation of a TLS
 Secret. M4b classifies renewal from these facts without re-reading the cluster;
 see [renewal](../renewal.md). Private keys and `privateKeySecretRef` targets are
 never read.
@@ -199,6 +201,9 @@ Findings are deterministic and sorted. The kinds are:
   public-CA lifetime. Reported only.
 - `manual-renewal-after-limit` - a manual renewal falls after the next CA/B
   step. Reported only.
+- `renewal-config-invalid` - a `spec.duration`, `spec.renewBefore`, or
+  `spec.renewBeforePercentage` value cert-manager's own validation rejects.
+  Reported only.
 
 Never infer: a comparison the evidence cannot settle is `not_checked`, and a
 record that cannot be correlated at all is `unknown`.
@@ -250,7 +255,7 @@ cells starting with `=`, `+`, `-`, `@`, tab, or carriage return).
 The certificate object gains `correlation_method`, `policy`, and `renewal`
 (`mode`, `health`, `evidence`, `risks`). The document gains `coverage` and the
 top-level `owners` workload summary, `findings.kind` gains
-`not-compliant-at-issuance` and the five renewal risk kinds, and the certificate
+`not-compliant-at-issuance` and the six renewal risk kinds, and the certificate
 table gains `MODE` and `HEALTH` columns plus a `RISKS` summary at the end, all
 within `scadenza.scan/v1` under the rules of
 [ADR 0007](../adr/0007-json-compatibility.md). It also carries the M3 additions:

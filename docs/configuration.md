@@ -34,7 +34,9 @@ kube:
 
 # Declared renewal modes, per domain. The only accepted value is `manual`: it is
 # positive evidence for renewal classification. An automatic mechanism (a
-# cert-manager Certificate or annotated TLS Secret) still wins. See
+# cert-manager Certificate or annotated TLS Secret) still wins. Keys are
+# normalized with the shared domain normalizer (lowercase, no leading wildcard,
+# no trailing dot), so `*.Example.COM.` and `example.com` are the same key. See
 # renewal.md.
 renewal:
   example.com: manual
@@ -43,7 +45,7 @@ policy:
   # Finding kinds that cause exit 3. One of ct_only, live_only, exceeds-100d,
   # not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded,
   # renew-before-loop-at-next-limit, duration-exceeds-next-limit,
-  # manual-renewal-after-limit, or none alone. Default:
+  # manual-renewal-after-limit, renewal-config-invalid, or none alone. Default:
   # [live_only, not-compliant-at-issuance, renew-before-exceeds-lifetime,
   # renewal-degraded].
   failOn:
@@ -78,6 +80,7 @@ only read from the file.
 
 Decoding is strict. An unreadable file, an unknown key, a missing or wrong
 `version` (must be `1`), an out-of-range `port` or `minCoverage`, an empty or
-unknown `policy.failOn` list, a `renewal` value other than `manual`, or `none`
-combined with another kind is a usage error (exit 2). Unknown keys and bad values are reported as `SCD-0022`; a bad
-`failOn` kind is reported as `SCD-0021`.
+unknown `policy.failOn` list, a `renewal` key that is not a valid domain, a
+`renewal` value other than `manual`, or `none` combined with another kind is a
+usage error (exit 2). Unknown keys and bad values are reported as `SCD-0022`; a
+bad `failOn` kind is reported as `SCD-0021`.

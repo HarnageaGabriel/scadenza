@@ -588,20 +588,27 @@ func renewalInput(certificate Certificate, in Input) renewal.Input {
 			if observation.Kubernetes != nil && input.Manager == nil {
 				resource := observation.Kubernetes
 				input.Manager = &renewal.Manager{
-					IssuerType:     resource.IssuerType,
-					ACMEServer:     resource.ACMEServer,
-					Duration:       resource.Duration,
-					RenewBefore:    resource.RenewBefore,
-					StatusNotAfter: resource.NotAfter,
-					RenewalTime:    resource.RenewalTime,
-					Ready:          resource.Ready,
-					ReadyReason:    resource.ReadyReason,
+					IssuerType:            resource.IssuerType,
+					ACMEServer:            resource.ACMEServer,
+					Duration:              resource.Duration,
+					RenewBefore:           resource.RenewBefore,
+					RenewBeforePercentage: resource.RenewBeforePercentage,
+					StatusNotAfter:        resource.NotAfter,
+					RenewalTime:           resource.RenewalTime,
+					Ready:                 resource.Ready,
+					ReadyReason:           resource.ReadyReason,
 				}
 			}
 		}
 	}
 	for _, record := range in.CT {
-		input.CT = append(input.CT, renewal.Issuance{Names: record.SubjectNames, NotBefore: record.NotBefore})
+		input.CT = append(input.CT, renewal.Issuance{
+			Names:       record.SubjectNames,
+			NotBefore:   record.NotBefore,
+			Issuer:      record.Issuer,
+			Fingerprint: record.Fingerprint,
+			Serial:      record.Serial,
+		})
 	}
 	return input
 }
@@ -615,7 +622,7 @@ func declaredRenewalMode(names []string, modes map[string]string) string {
 	}
 	best, value := "", ""
 	for _, name := range names {
-		normalized := strings.TrimSuffix(strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "*.")), ".")
+		normalized := owner.NormalizeDomain(name)
 		if normalized == "" {
 			continue
 		}

@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/HarnageaGabriel/scadenza/internal/ct"
+	"github.com/HarnageaGabriel/scadenza/internal/owner"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,6 +34,7 @@ var FailOnKinds = []string{
 	"renew-before-loop-at-next-limit",
 	"duration-exceeds-next-limit",
 	"manual-renewal-after-limit",
+	"renewal-config-invalid",
 	FailOnNone,
 }
 
@@ -194,15 +197,17 @@ func Parse(data []byte) (Config, error) {
 	return config, nil
 }
 
-// normalizeRenewal validates the per-domain renewal declarations. Only the
-// documented manual mode is accepted, so a typo cannot silently change a
-// classification.
+// normalizeRenewal validates the per-domain renewal declarations. Keys are
+// normalized with the shared domain normalizer, so "*.Example.COM." and
+// "example.com" are the same key, and a malformed key is rejected instead of
+// silently failing to match a certificate name. Only the documented manual mode
+// is accepted, so a typo cannot silently change a classification.
 func normalizeRenewal(values map[string]string) (map[string]string, error) {
 	result := make(map[string]string, len(values))
 	for domain, mode := range values {
-		normalized := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(domain, "*.")))
-		if normalized == "" {
-			return nil, fmt.Errorf("%w: renewal keys must be non-empty domains", ErrInvalid)
+		normalized := owner.NormalizeDomain(domain)
+		if _, err := ct.NormalizeDomain(normalized); err != nil {
+			return nil, fmt.Errorf("%w: renewal key %q is not a valid domain", ErrInvalid, domain)
 		}
 		value := strings.ToLower(strings.TrimSpace(mode))
 		if value != RenewalManual {

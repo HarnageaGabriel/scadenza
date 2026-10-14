@@ -93,30 +93,50 @@ Transparency records it already fetched:
 These facts explain the observed cadence. They never decide `renewal_mode` or
 `renewal_health`.
 
+The window is a fixed `365 * 24h` ending at the evaluation instant, so a leap
+year cannot stretch it to 366 days, and a record whose `notBefore` is after the
+evaluation instant is ignored. Records are deduplicated by stable issuance
+identity before the cadence is computed: the precertificate and the final
+certificate of one issuance share an issuer and serial, so they count once, and
+the duplicate records that overlapping domain queries return count once too.
+
 ## Risks: configurations that break under shorter lifetimes
 
 Each risk is also a finding, with its own diagnostic:
 
 - `renew-before-exceeds-lifetime` (`SCD-0023`) - a fixed `spec.renewBefore` is
   at or beyond the actual issued lifetime, so cert-manager renews in a loop now.
-  cert-manager requires `spec.duration` to be greater than `spec.renewBefore`.
 - `renew-before-loop-at-next-limit` (`SCD-0024`) - a fixed `spec.renewBefore`
   reaches the next CA/B maximum validity, or, for an ACME issuer on
   `acme-v02.api.letsencrypt.org`, the next announced Let's Encrypt lifetime. The
   `effective` date is recorded. `spec.renewBeforePercentage` is recommended
   because it follows the actual issued duration.
 - `duration-exceeds-next-limit` (`SCD-0025`) - a requested `spec.duration`
-  exceeds the next CA/B maximum validity for an ACME issuer on a known public
-  CA. The known ACME directory hosts are Let's Encrypt
+  exceeds the CA/B maximum validity that governs the next issuance for an ACME
+  issuer on a known public CA. When `spec.duration` is absent, cert-manager's
+  documented 90-day default is used and recorded as the evidence fact
+  `duration-source=default`. The known ACME directory hosts are Let's Encrypt
   (`acme-v02.api.letsencrypt.org`), ZeroSSL (`acme.zerossl.com`), Google Trust
   Services (`dv.acme-v02.api.pki.goog`, `pki.goog`), and Buypass
   (`api.buypass.com`). An unknown ACME server produces no finding, only evidence.
 - `renewal-degraded` (`SCD-0026`) - `renewal_health` is `degraded`.
 - `manual-renewal-after-limit` (`SCD-0027`) - a manual certificate's `notAfter`
   falls after the next CA/B step, so the manual workload grows.
+- `renewal-config-invalid` (`SCD-0028`) - `spec.duration`, `spec.renewBefore`,
+  or `spec.renewBeforePercentage` holds a value cert-manager's own validation
+  rejects: `spec.duration` must be at least 1h, the effective `spec.renewBefore`
+  must be at least 5m, `spec.duration` must be greater than `spec.renewBefore`
+  (equal is invalid), and `spec.renewBeforePercentage` must be an integer
+  percentage between 1 and 99 of the actual issued lifetime. Source:
+  <https://cert-manager.io/docs/usage/certificate/>.
+
+The CA/B step these risks compare against is chosen at the evaluation instant
+(`--now`), not from the certificate's `notBefore`: the next scheduled step, or,
+when no further step remains, the step already in force. A step that already
+took effect is therefore never reported with a stale effective date.
 
 `renew-before-exceeds-lifetime` and `renewal-degraded` are on by default in
-`--fail-on`; the other three are reported but do not fail the run.
+`--fail-on`; the others are reported but do not fail the run.
 
 ## Per-owner workload
 
@@ -136,11 +156,13 @@ is unchanged.
 The dated validity limits come from `internal/policy` (CA/Browser Forum
 SC-081v3). Renewal-specific facts come from:
 
-- cert-manager, `spec.duration`, `spec.renewBefore`, `renewBeforePercentage`,
+- cert-manager, `spec.duration`, `spec.renewBefore`, `spec.renewBeforePercentage`,
   `status.renewalTime`, and the `Ready` condition:
   <https://cert-manager.io/docs/usage/certificate/>.
-  Default `spec.duration` is 90 days and the default renewal is at 2/3 of the
-  actual issued duration.
+  Default `spec.duration` is 90 days, the default renewal is at 2/3 of the
+  actual issued duration, `spec.duration` must be greater than
+  `spec.renewBefore`, and `spec.renewBeforePercentage` is a percentage of the
+  actual issued lifetime.
 - Let's Encrypt, `https://letsencrypt.org/2025/12/02/from-90-to-45`: the default
   profile is 90 days, 64 days from 2027-02-10, and 45 days from 2028-02-16.
   Let's Encrypt recommends renewing at about two-thirds of the lifetime or with
@@ -148,11 +170,13 @@ SC-081v3). Renewal-specific facts come from:
 
 **VERIFY:** the 64-day (2027-02-10) and 45-day (2028-02-16) Let's Encrypt step
 dates are encoded from the announcement and must be confirmed against the
-official post before they are relied on. The public ACME directory hosts and the
-CA/B backdating allowance carry the same `VERIFY` markers in the code.
+official post before they are relied on. Because they are announced rather than
+confirmed, a risk detail names them as announced, not confirmed. The public ACME
+directory hosts and the CA/B backdating allowance carry the same `VERIFY`
+markers in the code.
 
 scadenza reads only fields it already reads from the cluster: `spec.duration`,
-`spec.renewBefore`, `status.notAfter`, `status.renewalTime`, the `Ready`
-condition, the issuer type and ACME server, and the Secret annotation. It does
-not read `spec.renewBeforePercentage`, so an explicit `spec.renewBefore` is
-treated as fixed.
+`spec.renewBefore`, `spec.renewBeforePercentage`, `status.notAfter`,
+`status.renewalTime`, the `Ready` condition, the issuer type and ACME server,
+and the Secret annotation. An explicit `spec.renewBefore` is treated as fixed;
+`spec.renewBeforePercentage` is computed from the actual issued lifetime.

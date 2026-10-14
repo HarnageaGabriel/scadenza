@@ -96,10 +96,13 @@ type Kubernetes struct {
 	ACMEServer  string `json:"acme_server,omitempty"`
 	Duration    string `json:"duration,omitempty"`
 	RenewBefore string `json:"renew_before,omitempty"`
-	NotAfter    string `json:"status_not_after,omitempty"`
-	RenewalTime string `json:"status_renewal_time,omitempty"`
-	Ready       string `json:"ready,omitempty"`
-	ReadyReason string `json:"ready_reason,omitempty"`
+	// RenewBeforePercentage is spec.renewBeforePercentage, the integer
+	// percentage of the actual issued lifetime at which renewal happens.
+	RenewBeforePercentage string `json:"renew_before_percentage,omitempty"`
+	NotAfter              string `json:"status_not_after,omitempty"`
+	RenewalTime           string `json:"status_renewal_time,omitempty"`
+	Ready                 string `json:"ready,omitempty"`
+	ReadyReason           string `json:"ready_reason,omitempty"`
 	// CertificateName is the cert-manager.io/certificate-name annotation of a
 	// kubernetes.io/tls Secret, empty when the Secret is unmanaged. It is
 	// already read for ownership; renewal classification reuses it.

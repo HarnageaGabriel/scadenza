@@ -426,7 +426,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	command.Flags().Float64Var(&kubeQPS, "kube-qps", 5, "Kubernetes client request rate per second")
 	command.Flags().BoolVar(&strict, "strict", false, "exit 5 when any source is partial or failed, any probe failed, or any item was not checked")
 	command.Flags().IntVar(&minCoverage, "min-coverage", 0, "exit 5 when the coverage ratio is below this percentage (0-100)")
-	command.Flags().StringVar(&failOn, "fail-on", "live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded", "comma list of finding kinds that cause exit 3: ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, none")
+	command.Flags().StringVar(&failOn, "fail-on", "live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded", "comma list of finding kinds that cause exit 3: ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, renewal-config-invalid, none")
 	command.Flags().StringVar(&groupBy, "group-by", render.GroupNone, "table grouping: owner, names, or none (JSON is unchanged)")
 	command.Flags().StringVar(&nowFlag, "now", "", "evaluation instant as an RFC 3339 timestamp; defaults to the current time")
 	command.Flags().StringVar(&configPath, "config", "", "explicit YAML configuration file; never auto-loaded")

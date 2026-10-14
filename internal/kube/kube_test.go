@@ -346,10 +346,11 @@ func TestScanCertManager(t *testing.T) {
 	_, chain, _ := generateChain(t)
 	secret := tlsSecret("payments", "db-tls", map[string][]byte{"tls.crt": chain}, nil)
 	certificate := certificateObject("payments", "db", map[string]any{
-		"secretName":  "db-tls",
-		"duration":    "2160h",
-		"renewBefore": "720h",
-		"issuerRef":   map[string]any{"name": "letsencrypt", "kind": ClusterIssuerKind},
+		"secretName":            "db-tls",
+		"duration":              "2160h",
+		"renewBefore":           "720h",
+		"renewBeforePercentage": int64(50),
+		"issuerRef":             map[string]any{"name": "letsencrypt", "kind": ClusterIssuerKind},
 	}, map[string]any{
 		"notAfter":    "2026-04-01T00:00:00Z",
 		"renewalTime": "2026-03-01T00:00:00Z",
@@ -379,7 +380,7 @@ func TestScanCertManager(t *testing.T) {
 	if facts == nil || facts.IssuerType != IssuerTypeACME || facts.ACMEServer != "https://acme-v02.api.letsencrypt.org/directory" {
 		t.Fatalf("facts = %+v", facts)
 	}
-	if facts.Duration != "2160h" || facts.RenewBefore != "720h" || facts.NotAfter != "2026-04-01T00:00:00Z" || facts.RenewalTime != "2026-03-01T00:00:00Z" || facts.Ready != "True" {
+	if facts.Duration != "2160h" || facts.RenewBefore != "720h" || facts.RenewBeforePercentage != "50" || facts.NotAfter != "2026-04-01T00:00:00Z" || facts.RenewalTime != "2026-03-01T00:00:00Z" || facts.Ready != "True" {
 		t.Fatalf("raw facts = %+v", facts)
 	}
 	if strings.Contains(fmt.Sprintf("%+v", facts), "should-not-be-read") {

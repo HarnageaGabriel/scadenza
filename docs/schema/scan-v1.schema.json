@@ -79,7 +79,7 @@
                   "additionalProperties": false,
                   "required": ["kind", "detail"],
                   "properties": {
-                    "kind": {"enum": ["renew-before-exceeds-lifetime", "renew-before-loop-at-next-limit", "duration-exceeds-next-limit", "renewal-degraded", "manual-renewal-after-limit"]},
+                    "kind": {"enum": ["renew-before-exceeds-lifetime", "renew-before-loop-at-next-limit", "duration-exceeds-next-limit", "renewal-degraded", "manual-renewal-after-limit", "renewal-config-invalid"]},
                     "detail": {"type": "string", "minLength": 1},
                     "effective": {"type": "string"}
                   }
@@ -112,6 +112,7 @@
                     "acme_server": {"type": "string"},
                     "duration": {"type": "string"},
                     "renew_before": {"type": "string"},
+                    "renew_before_percentage": {"type": "string"},
                     "status_not_after": {"type": "string"},
                     "status_renewal_time": {"type": "string"},
                     "ready": {"type": "string"},
@@ -132,7 +133,7 @@
         "additionalProperties": false,
         "required": ["kind", "fingerprint", "names", "detail"],
         "properties": {
-          "kind": {"enum": ["matched", "ct_only", "live_only", "kube_only", "not_checked", "unknown", "exceeds-100d", "not-compliant-at-issuance"]},
+          "kind": {"enum": ["matched", "ct_only", "live_only", "kube_only", "not_checked", "unknown", "exceeds-100d", "not-compliant-at-issuance", "renew-before-exceeds-lifetime", "renew-before-loop-at-next-limit", "duration-exceeds-next-limit", "renewal-degraded", "manual-renewal-after-limit", "renewal-config-invalid"]},
           "fingerprint": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
           "names": {"type": "array", "items": {"type": "string"}},
           "detail": {"type": "string", "minLength": 1}
