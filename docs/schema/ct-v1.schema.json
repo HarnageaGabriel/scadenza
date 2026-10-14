@@ -15,7 +15,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["fingerprint_sha256", "serial", "subject_names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "revoked", "source"],
+        "required": ["fingerprint_sha256", "serial", "subject_names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "policy", "revoked", "source"],
         "properties": {
           "fingerprint_sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
           "serial": {"type": "string"},
@@ -25,6 +25,18 @@
           "not_after": {"type": "string", "format": "date-time"},
           "lifetime_days": {"type": "integer", "minimum": 0},
           "verdict_100d": {"enum": ["ok", "exceeds"]},
+          "policy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["max_validity_at_issuance_days", "compliant_at_issuance", "next_limit_days", "next_limit_effective", "fits_next_limit"],
+            "properties": {
+              "max_validity_at_issuance_days": {"type": "integer", "minimum": 0},
+              "compliant_at_issuance": {"type": "boolean"},
+              "next_limit_days": {"type": "integer", "minimum": 0},
+              "next_limit_effective": {"type": "string"},
+              "fits_next_limit": {"type": "boolean"}
+            }
+          },
           "revoked": {"type": ["boolean", "null"]},
           "source": {"enum": ["certspotter", "crtsh"]}
         }

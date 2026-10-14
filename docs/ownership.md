@@ -13,7 +13,8 @@ An owner value is read from, in this order:
   Certificate object.
 - `annotation` - the same keys, read from the object's annotations.
 - `namespace-label` / `namespace-annotation` - the same keys, read from the
-  namespace that holds the object.
+  namespace that holds the object. A namespace annotation is always reported as
+  `namespace-annotation`, never as `namespace-label`.
 - `mapping-file` - a `domains` entry whose domain suffix matches one of the
   certificate names, or a `namespaces` entry for the object's namespace.
 

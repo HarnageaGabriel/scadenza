@@ -132,7 +132,7 @@ exists today.
 | `scadenza ct`: Cert Spotter and crt.sh, table / JSON / CSV | Done | M1 |
 | `scadenza scan`: TLS handshakes with SNI, fingerprint correlation, `ct_only` / `live_only` | Done | M2 |
 | Kubernetes TLS Secrets and cert-manager `Certificate` resources, ownership mapping | Done | M3 |
-| Reliable results: coverage, `--strict`, `--fail-on`, dated time rules, JSON contract tests | Planned | M4a |
+| Reliable results: coverage, `--strict`, `--fail-on`, dated time rules, JSON contract tests | Done | M4a |
 | Renewal classification with evidence: mode (automatic, manual, unknown) and health | Planned | M4b |
 | Kubernetes without reading Secrets by default; Azure Key Vault | Planned | M5 |
 | Releases: GoReleaser, Homebrew, krew | Planned | M6 / 0.1.0 |
@@ -180,11 +180,18 @@ scadenza scan --domain example.com --host api.example.com:8443
 
 # Add a Kubernetes cluster (read-only) and an ownership file
 scadenza scan --domain example.com --kube --kube-context prod --ownership-file owners.yaml
+
+# Fail CI on an incomplete scan, or only on selected findings
+scadenza scan --domain example.com --strict --min-coverage 90 --fail-on live_only
+
+# Read everything from an explicit configuration file
+scadenza scan --config scadenza.yaml
 ```
 
 Reference: [`ct`](docs/cli/ct.md), [`scan`](docs/cli/scan.md),
-[ownership](docs/ownership.md), [exit codes](docs/exit-codes.md), and the
-minimal [read-only RBAC](deploy/rbac/scadenza-readonly.yaml) for clusters.
+[configuration](docs/configuration.md), [ownership](docs/ownership.md),
+[exit codes](docs/exit-codes.md), and the minimal
+[read-only RBAC](deploy/rbac/scadenza-readonly.yaml) for clusters.
 
 Cert Spotter answers a limited number of requests without an account. For
 regular use, set an API key in `SCADENZA_CERTSPOTTER_KEY`; it is never

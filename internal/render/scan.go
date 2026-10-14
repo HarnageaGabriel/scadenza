@@ -26,6 +26,7 @@ type ScanDocument struct {
 	Unresolved    []inventory.Unresolved  `json:"unresolved"`
 	ProbeErrors   []inventory.ProbeError  `json:"probe_errors"`
 	Diagnostics   []diag.Diagnostic       `json:"diagnostics"`
+	Coverage      inventory.Coverage      `json:"coverage"`
 }
 
 // Scan writes a scan document as table, JSON, or CSV.
@@ -39,6 +40,7 @@ func Scan(writer io.Writer, format string, document ScanDocument) error {
 		document.Unresolved = emptyIfNil(document.Unresolved)
 		document.ProbeErrors = emptyIfNil(document.ProbeErrors)
 		document.Diagnostics = emptyIfNil(document.Diagnostics)
+		document.Coverage.Sources = emptyIfNil(document.Coverage.Sources)
 		for index := range document.Certificates {
 			document.Certificates[index].Names = emptyIfNil(document.Certificates[index].Names)
 			document.Certificates[index].Observations = emptyIfNil(document.Certificates[index].Observations)
@@ -134,7 +136,25 @@ func writeScanTable(writer io.Writer, document ScanDocument) error {
 			return err
 		}
 	}
-	return findings.Flush()
+	if err := findings.Flush(); err != nil {
+		return err
+	}
+	return writeCoverageLine(writer, document.Coverage)
+}
+
+// writeCoverageLine always prints a one-line coverage summary after the table,
+// so a partial scan never looks clean.
+func writeCoverageLine(writer io.Writer, coverage inventory.Coverage) error {
+	sources := make([]string, 0, len(coverage.Sources))
+	for _, source := range coverage.Sources {
+		sources = append(sources, source.Name+":"+source.Status)
+	}
+	_, err := fmt.Fprintf(writer,
+		"COVERAGE requested=%d probed=%d failed=%d not_checked=%d ratio=%.2f%% sources=%s\n",
+		coverage.TargetsRequested, coverage.TargetsProbed, coverage.TargetsFailed,
+		coverage.NamesNotChecked, coverage.Ratio*100, sanitizeCell(strings.Join(sources, ",")),
+	)
+	return err
 }
 
 func displayFingerprint(value string) string {

@@ -5,6 +5,8 @@
 package inventory
 
 import (
+	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
 	"github.com/HarnageaGabriel/scadenza/internal/kube"
 	"github.com/HarnageaGabriel/scadenza/internal/owner"
+	"github.com/HarnageaGabriel/scadenza/internal/policy"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
 )
 
@@ -32,6 +35,19 @@ const (
 	KindExceeds100D = "exceeds-100d"
 	// KindKubeOnly means the certificate was read only from Kubernetes.
 	KindKubeOnly = "kube_only"
+	// KindNotCompliantAtIssuance means the lifetime exceeded the maximum
+	// validity in force when the certificate was issued.
+	KindNotCompliantAtIssuance = "not-compliant-at-issuance"
+)
+
+// Correlation methods state how a certificate's identity was established.
+const (
+	// CorrelationSHA256 means the entry is keyed by SHA-256 fingerprint.
+	CorrelationSHA256 = "sha256"
+	// CorrelationIssuerSerial means the entry was matched by issuer and serial.
+	CorrelationIssuerSerial = "issuer_serial"
+	// CorrelationUnresolved means nothing could correlate the record.
+	CorrelationUnresolved = "unresolved"
 )
 
 // Observation sources.
@@ -61,16 +77,21 @@ type Observation struct {
 
 // Certificate is one correlated certificate.
 type Certificate struct {
-	Fingerprint  string        `json:"fingerprint_sha256"`
-	Serial       string        `json:"serial"`
-	Names        []string      `json:"names"`
-	Issuer       string        `json:"issuer"`
-	NotBefore    time.Time     `json:"not_before"`
-	NotAfter     time.Time     `json:"not_after"`
-	LifetimeDays int           `json:"lifetime_days"`
-	Verdict100D  string        `json:"verdict_100d"`
-	Public       *bool         `json:"public"`
-	Observations []Observation `json:"observations"`
+	Fingerprint  string    `json:"fingerprint_sha256"`
+	Serial       string    `json:"serial"`
+	Names        []string  `json:"names"`
+	Issuer       string    `json:"issuer"`
+	NotBefore    time.Time `json:"not_before"`
+	NotAfter     time.Time `json:"not_after"`
+	LifetimeDays int       `json:"lifetime_days"`
+	Verdict100D  string    `json:"verdict_100d"`
+	// CorrelationMethod is sha256, issuer_serial, or unresolved: the weakest
+	// piece of evidence that placed this certificate in the inventory.
+	CorrelationMethod string `json:"correlation_method"`
+	// Policy is the dated validity assessment; verdict_100d stays unchanged.
+	Policy       policy.Assessment `json:"policy"`
+	Public       *bool             `json:"public"`
+	Observations []Observation     `json:"observations"`
 	// Owners lists every explicitly declared owner, each with the rule that
 	// produced it. It is empty when no ownership rule matched.
 	Owners []owner.Owner `json:"owners"`
@@ -122,6 +143,7 @@ type accumulator struct {
 	names        map[string]bool
 	owners       map[string]owner.Owner
 	observations map[string]Observation
+	method       string
 }
 
 // Correlate merges CT issuances and live observations and returns the sorted
@@ -153,6 +175,7 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		}
 		key := "fp:" + result.Fingerprint
 		entry := ensure(accumulated, &order, key, result.Fingerprint)
+		entry.setMethod(CorrelationSHA256)
 		entry.hasLive = true
 		entry.trustChecked = true
 		if result.Trusted {
@@ -190,6 +213,14 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 			}
 		}
 		entry := ensure(accumulated, &order, key, fingerprint)
+		switch {
+		case record.Fingerprint != "":
+			entry.setMethod(CorrelationSHA256)
+		case fingerprint != "":
+			entry.setMethod(CorrelationIssuerSerial)
+		default:
+			entry.setMethod(CorrelationUnresolved)
+		}
 		entry.hasCT = true
 		for _, name := range record.SubjectNames {
 			name = normalizeName(name)
@@ -228,6 +259,11 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 			key = "fp:" + record.Fingerprint
 		}
 		entry := ensure(accumulated, &order, key, record.Fingerprint)
+		if record.Fingerprint != "" {
+			entry.setMethod(CorrelationSHA256)
+		} else {
+			entry.setMethod(CorrelationUnresolved)
+		}
 		entry.hasKube = true
 		for _, name := range record.Names {
 			if normalized := normalizeName(name); normalized != "" {
@@ -274,6 +310,11 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		certificate := entry.certificate
 		certificate.Names = sortedKeys(entry.names)
 		certificate.LifetimeDays, certificate.Verdict100D = lifetime(certificate.NotBefore, certificate.NotAfter)
+		certificate.CorrelationMethod = entry.method
+		if certificate.CorrelationMethod == "" {
+			certificate.CorrelationMethod = CorrelationUnresolved
+		}
+		certificate.Policy = policy.Assess(certificate.NotBefore, certificate.NotAfter)
 		switch {
 		case entry.anyTrusted || entry.kubePublic:
 			public := true
@@ -299,6 +340,14 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 				Fingerprint: certificate.Fingerprint,
 				Names:       certificate.Names,
 				Detail:      "validity exceeds 100 days; renewal must fit the 100-day limit",
+			})
+		}
+		if validLifetime(certificate.NotBefore, certificate.NotAfter) && !certificate.Policy.CompliantAtIssuance {
+			findings = append(findings, Finding{
+				Kind:        KindNotCompliantAtIssuance,
+				Fingerprint: certificate.Fingerprint,
+				Names:       certificate.Names,
+				Detail:      nonComplianceDetail(certificate),
 			})
 		}
 	}
@@ -407,6 +456,36 @@ func inScope(name string, domains []string) bool {
 		}
 	}
 	return false
+}
+
+// setMethod keeps the weakest correlation evidence, so the reported strength is
+// never stronger than the least certain observation in the entry.
+func (a *accumulator) setMethod(method string) {
+	if a.method == "" || correlationRank(method) < correlationRank(a.method) {
+		a.method = method
+	}
+}
+
+func correlationRank(method string) int {
+	switch method {
+	case CorrelationSHA256:
+		return 2
+	case CorrelationIssuerSerial:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func validLifetime(notBefore, notAfter time.Time) bool {
+	return !notBefore.IsZero() && !notAfter.IsZero() && !notAfter.Before(notBefore)
+}
+
+func nonComplianceDetail(certificate Certificate) string {
+	return fmt.Sprintf(
+		"lifetime %d days exceeds the %d-day maximum validity in force at issuance",
+		certificate.LifetimeDays, certificate.Policy.MaxValidityAtIssuanceDays,
+	)
 }
 
 func ensure(accumulated map[string]*accumulator, order *[]string, key, fingerprint string) *accumulator {
@@ -583,4 +662,60 @@ func lessFinding(a, b Finding) bool {
 		return namesA < namesB
 	}
 	return a.Detail < b.Detail
+}
+
+// Coverage statuses for one input source.
+const (
+	SourceStatusOK           = "ok"
+	SourceStatusPartial      = "partial"
+	SourceStatusFailed       = "failed"
+	SourceStatusNotRequested = "not_requested"
+)
+
+// SourceCoverage is the health of one input source.
+type SourceCoverage struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+// Coverage reports how much of the requested inventory a scan actually checked,
+// so a partial scan never looks clean.
+//
+// ratio is targets_probed / targets_requested rounded to four decimals, where
+// targets_requested counts explicit and derived targets, including those
+// dropped by the --max-hosts cap, and targets_probed counts probes that completed successfully. It is 1.0
+// when no target was requested. Cap-truncated and wildcard names are counted
+// separately in names_not_checked.
+type Coverage struct {
+	TargetsRequested int              `json:"targets_requested"`
+	TargetsProbed    int              `json:"targets_probed"`
+	TargetsFailed    int              `json:"targets_failed"`
+	NamesNotChecked  int              `json:"names_not_checked"`
+	Sources          []SourceCoverage `json:"sources"`
+	Ratio            float64          `json:"ratio"`
+}
+
+// NewCoverage assembles a deterministic coverage report.
+func NewCoverage(requested, probed, failed, notChecked int, sources []SourceCoverage) Coverage {
+	sorted := append([]SourceCoverage(nil), sources...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	ratio := 1.0
+	if requested > 0 {
+		ratio = math.Round(float64(probed)/float64(requested)*10000) / 10000
+		if ratio < 0 {
+			ratio = 0
+		}
+		if ratio > 1 {
+			ratio = 1
+		}
+	}
+	return Coverage{
+		TargetsRequested: requested,
+		TargetsProbed:    probed,
+		TargetsFailed:    failed,
+		NamesNotChecked:  notChecked,
+		Sources:          sorted,
+		Ratio:            ratio,
+	}
 }

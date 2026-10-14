@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HarnageaGabriel/scadenza/internal/policy"
 	"golang.org/x/net/idna"
 )
 
@@ -24,9 +25,11 @@ type Certificate struct {
 	NotAfter     time.Time `json:"not_after"`
 	LifetimeDays int       `json:"lifetime_days"`
 	Verdict100D  string    `json:"verdict_100d"`
-	Revoked      *bool     `json:"revoked"`
-	Source       string    `json:"source"`
-	DedupKey     string    `json:"-"`
+	// Policy is the dated validity assessment; verdict_100d stays unchanged.
+	Policy   policy.Assessment `json:"policy"`
+	Revoked  *bool             `json:"revoked"`
+	Source   string            `json:"source"`
+	DedupKey string            `json:"-"`
 }
 
 // Query describes a source lookup.
@@ -109,6 +112,7 @@ func Finalize(certificates []Certificate, now time.Time, includeExpired bool, ma
 		} else {
 			certificate.Verdict100D = "exceeds"
 		}
+		certificate.Policy = policy.Assess(certificate.NotBefore, certificate.NotAfter)
 		key := certificate.Fingerprint
 		if key == "" {
 			key = certificate.DedupKey

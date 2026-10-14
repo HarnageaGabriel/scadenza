@@ -10,6 +10,9 @@ scadenza scan --domain example.com
 scadenza scan --domain example.com --format json
 scadenza scan --domain example.com --host www.example.com:8443 --source crtsh
 scadenza scan --from-ct=false --hosts-file hosts.txt
+scadenza scan --domain example.com --strict --min-coverage 90 --fail-on live_only
+scadenza scan --config scadenza.yaml
+scadenza scan --domain example.com --now 2027-04-01T00:00:00Z --format json
 ```
 
 ## What gets probed
@@ -38,6 +41,18 @@ derived names are listed in `unresolved` with reason `host-cap` and reported as
   `--max-hosts` (default 200).
 - `--source certspotter,crtsh` selects and orders CT sources.
 - `--format table|json|csv` selects table (default), versioned JSON, or CSV.
+- `--strict` exits 5 (`SCD-0020`) when any source is partial or failed, any probe
+  failed, or any item was not checked.
+- `--min-coverage <0-100>` exits 5 (`SCD-0020`) when the coverage ratio is below
+  this percentage.
+- `--fail-on k1,k2` selects the finding kinds that cause exit 3. One or more of
+  `ct_only`, `live_only`, `exceeds-100d`, `not-compliant-at-issuance`, or `none`
+  alone. Default `live_only,not-compliant-at-issuance`.
+- `--now RFC3339` fixes the evaluation instant. The same input then gives the
+  same output, and you can evaluate against a future date. It also sets
+  `generated_at`.
+- `--config path` reads an explicit YAML file; see
+  [configuration](../configuration.md). It is never auto-loaded.
 - `--kube` also reads TLS Secrets and cert-manager Certificates from a
   Kubernetes cluster, read-only.
 - `--kube-context name`, `--kubeconfig path`, `--namespace ns` (repeatable,
@@ -69,7 +84,8 @@ reported with the finding kind `kube_only`.
 
 Owners come only from labels, annotations, namespaces, and an optional mapping
 file; see [ownership](../ownership.md). Each owner records its source in the
-`owners` array (`owner`, `owner_source`, `location`).
+`owners` array (`owner`, `owner_source`, `location`). A namespace annotation is
+reported as `namespace-annotation` and a namespace label as `namespace-label`.
 
 Credentials and kubeconfig content are never printed. Reads use only `list` and
 `get`; the minimal RBAC is in
@@ -96,10 +112,41 @@ Otherwise each is kept separate and reported as `unknown`. VERIFY:
 precertificate/final-certificate correlation (RFC 6962) is not implemented; a
 precertificate and its final certificate share names but not fingerprints.
 
+Every certificate states how strong its correlation is in `correlation_method`:
+
+- `sha256` - the entry is keyed by a SHA-256 fingerprint.
+- `issuer_serial` - it was matched by issuer and serial number.
+- `unresolved` - nothing correlated the record.
+
+The value is the **weakest** evidence that placed the certificate in the
+inventory, so a merged entry never claims more certainty than its least certain
+observation.
+
 The live certificate is verified separately against the system roots (see
 [ADR 0004](../adr/0004-tls-verification-policy.md)); `public` is `true`, `false`,
 or `null` (unknown for CT-only certificates). `exceeds` is computed from the
 exact, unrounded validity duration, as in `scadenza ct`.
+
+## Dated policy
+
+Each certificate carries a `policy` object computed from its `not_before`:
+
+- `max_validity_at_issuance_days` - the maximum validity in force at issuance.
+- `compliant_at_issuance` - whether the exact lifetime fits that maximum. A
+  CA may backdate `not_before` by up to 24 hours, so the most permissive limit
+  in `[not_before, not_before+24h]` is used (VERIFY: the exact BR backdating
+  allowance).
+- `next_limit_days` and `next_limit_effective` - the next scheduled limit and
+  its effective date (empty after the last step).
+- `fits_next_limit` - whether the lifetime also fits the next limit.
+
+The schedule is 398 days before 2026-03-15, then 200, 100, and 47 days from
+2026-03-15, 2027-03-15, and 2029-03-15 (SC-081v3). Domain validation reuse is
+398/200/100/10 days over the same steps. `verdict_100d` stays unchanged for
+compatibility and is a readiness signal, never a compliance verdict.
+
+A certificate that does not fit the limit in force at issuance also produces a
+`not-compliant-at-issuance` finding, which is in the default failure policy.
 
 ## Findings
 
@@ -107,7 +154,7 @@ Findings are deterministic and sorted. The kinds are:
 
 - `matched` - both issued in CT and presented live.
 - `live_only` - presented by a probed host but absent from CT; the detail is
-  marked `private_or_untrusted` when the chain did not verify.
+  marked `private_or_untrusted` when the chain did not verify. Fails by default.
 - `unknown` - the CT record carries neither a fingerprint nor a serial number,
   so it cannot be correlated with anything. This is decided before the deferral
   rule below, so such a record is `unknown` even when it is expired.
@@ -117,34 +164,59 @@ Findings are deterministic and sorted. The kinds are:
 - `ct_only` - still valid in CT, and every in-scope name is a host that was
   probed and answered live without presenting this certificate. A name seen only
   as a SAN on another host's certificate was never probed, so it makes the
-  certificate `not_checked`, never `ct_only`.
+  certificate `not_checked`, never `ct_only`. Reported but not failing by
+  default.
 - `exceeds-100d` - the certificate validity exceeds 100 days; emitted in
-  addition to the kind above.
+  addition to the kind above. Reported but not failing by default.
+- `not-compliant-at-issuance` - the lifetime exceeds the maximum validity in
+  force at issuance. Fails by default.
 - `kube_only` - read from Kubernetes and not observed in CT or a live handshake.
 
 Never infer: a comparison the evidence cannot settle is `not_checked`, and a
 record that cannot be correlated at all is `unknown`.
 
+## Coverage
+
+Every scan reports a `coverage` object so a partial scan never looks clean. It
+is always printed, and the table adds a one-line summary after the findings.
+
+- `targets_requested` - explicit and derived targets, including derived
+  hosts dropped by the `--max-hosts` cap (they were requested but not checked).
+- `targets_probed` - probes that completed successfully.
+- `targets_failed` - probes that failed (the same entries as `probe_errors`).
+- `names_not_checked` - names in `unresolved` plus the number of `not_checked`
+  findings.
+- `sources` - one entry per source, always, with `status` `ok`, `partial`,
+  `failed`, or `not_requested` and a `detail`.
+- `ratio` - `targets_probed / targets_requested` rounded to four decimals, and
+  `1.0` when nothing was requested.
+
+The ratio is deliberately about probe coverage, not certificate compliance; it
+never turns a missing check into a pass.
+
 ## Exit codes
 
-`0` when no `ct_only`, `live_only`, or `exceeds-100d` finding exists (matched,
-`not_checked`, and `kube_only` findings do not affect the exit status). `3` when
-one of those findings exists. `4` only when at least one external source
-(Certificate Transparency or Kubernetes) was requested and every requested one
-was unavailable; a failed TLS probe is a `probe_errors` entry, never exit 4, and
-partial failures are warnings. `2` on usage errors. See
+The order is **2 usage > 4 all sources unavailable > 3 blocking finding > 5
+incomplete scan > 0**. `4` only when at least one external source (Certificate
+Transparency or Kubernetes) was requested and every requested one was
+unavailable; a failed TLS probe is a `probe_errors` entry, never exit 4, and
+partial failures are warnings. `3` when a finding of a kind selected by
+`--fail-on` is present. `5` when `--strict` or `--min-coverage` is not met and
+nothing else applies. `2` on usage errors. See
 [exit codes](../exit-codes.md).
 
 ## Output
 
 JSON follows [`scadenza.scan/v1`](../schema/scan-v1.schema.json) and contains
-`certificates`, `findings`, `unresolved`, `probe_errors`, and `diagnostics`.
-The table prints the certificates followed by a findings summary. CSV emits one
-row per (certificate, observation) and reuses the `scadenza ct` formula-injection
-escaping (a leading single quote for cells starting with `=`, `+`, `-`, `@`, tab,
-or carriage return).
+`certificates`, `findings`, `unresolved`, `probe_errors`, `diagnostics`, and
+`coverage`. The table prints the certificates, the findings summary, and the
+one-line coverage summary. CSV emits one row per (certificate, observation) and
+reuses the `scadenza ct` formula-injection escaping (a leading single quote for
+cells starting with `=`, `+`, `-`, `@`, tab, or carriage return).
 
-The certificate object additively gains `owners` (when an ownership rule
-matched) and each observation gains a `kubernetes` object for Kubernetes
-sources. `sources_used`, `verdict_100d`, `findings.kind`, and the observation
-`source` enum gained the Kubernetes values without bumping `scadenza.scan/v1`.
+The certificate object gains `correlation_method` and `policy`. The document
+gains `coverage`, and `findings.kind` gains `not-compliant-at-issuance`, all
+within `scadenza.scan/v1` under the rules of
+[ADR 0007](../adr/0007-json-compatibility.md). It also carries the M3 additions:
+`owners`, the per-observation `kubernetes` object, and the Kubernetes
+`sources_used`, `verdict_100d`, findings kind, and observation source values.

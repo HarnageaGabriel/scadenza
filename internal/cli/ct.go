@@ -68,6 +68,7 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 	var includeSubdomains, expired bool
 	var format string
 	var maximum int
+	var nowFlag string
 	command := &cobra.Command{
 		Use: "ct <domain>", Short: "List certificates issued for a domain", Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(command *cobra.Command, args []string) error {
@@ -83,6 +84,15 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 			if format != "table" && format != "json" && format != "csv" {
 				emitDiagnostic(stderr, "SCD-0001", "--format must be table, json, or csv")
 				return &commandError{code: ExitUsageError}
+			}
+			evaluationClock := dependencies.clock
+			if strings.TrimSpace(nowFlag) != "" {
+				parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(nowFlag))
+				if parseErr != nil {
+					emitDiagnostic(stderr, "SCD-0001", "--now must be an RFC 3339 timestamp")
+					return &commandError{code: ExitUsageError}
+				}
+				evaluationClock = clock.Fixed{Time: parsed}
 			}
 			chosen := make([]ct.Source, 0, len(sourceNames))
 			for _, name := range sourceNames {
@@ -115,7 +125,7 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 			if err != nil {
 				return &commandError{code: ExitSourceUnavailable}
 			}
-			now := dependencies.clock.Now()
+			now := evaluationClock.Now()
 			certificates, truncated := ct.Finalize(certificates, now, expired, maximum)
 			if truncated {
 				item, _ := diag.Lookup("SCD-0006")
@@ -139,6 +149,7 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 	command.Flags().BoolVar(&expired, "expired", false, "include expired certificates")
 	command.Flags().StringVar(&format, "format", "table", "output format: table, json, csv")
 	command.Flags().IntVar(&maximum, "max-results", 1000, "maximum certificates to print")
+	command.Flags().StringVar(&nowFlag, "now", "", "evaluation instant as an RFC 3339 timestamp; defaults to the current time")
 	return command
 }
 

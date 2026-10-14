@@ -21,3 +21,6 @@ Generated from `internal/diag/registry.yaml`. Do not edit by hand.
 - [SCD-0017 — Kubernetes certificate could not be parsed](SCD-0017.md)
 - [SCD-0018 — cert-manager custom resources are not installed](SCD-0018.md)
 - [SCD-0019 — Ownership file could not be used](SCD-0019.md)
+- [SCD-0020 — Scan did not check everything it was asked to check](SCD-0020.md)
+- [SCD-0021 — Invalid --fail-on kind](SCD-0021.md)
+- [SCD-0022 — Configuration file could not be used](SCD-0022.md)

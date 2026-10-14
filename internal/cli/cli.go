@@ -21,6 +21,9 @@ const (
 	ExitFindingsPresent = 3
 	// ExitSourceUnavailable indicates a required source could not be used.
 	ExitSourceUnavailable = 4
+	// ExitIncompleteScan indicates the scan did not check everything it was
+	// asked to check (--strict or --min-coverage).
+	ExitIncompleteScan = 5
 )
 
 // Execute runs the CLI and converts command errors to documented exit codes.

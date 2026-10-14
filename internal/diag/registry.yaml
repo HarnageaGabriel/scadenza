@@ -114,3 +114,21 @@ codes:
     summary: Ownership file could not be used
     explanation: The --ownership-file could not be read or did not match the documented schema. Owner resolution is not attempted from an invalid file, so no owner is inferred.
     remediation: Fix the YAML so it contains only labelKeys, domains, and namespaces, and give every value a non-empty string.
+  - code: SCD-0020
+    slug: incomplete-scan
+    severity: error
+    summary: Scan did not check everything it was asked to check
+    explanation: Either --strict found a partial or failed source, a failed probe, or an unchecked name, or the coverage ratio fell below --min-coverage. The results are still complete for what was checked; the scan is simply not a clean one.
+    remediation: Review the coverage summary and unresolved names, then raise --max-hosts, fix the failing source or probe, or lower --min-coverage once the gap is understood.
+  - code: SCD-0021
+    slug: invalid-fail-on-kind
+    severity: error
+    summary: Invalid --fail-on kind
+    explanation: The --fail-on value listed a kind that is not one of ct_only, live_only, exceeds-100d, not-compliant-at-issuance, or none, or combined none with another kind.
+    remediation: Use only the documented kinds; pass none alone to disable exit 3.
+  - code: SCD-0022
+    slug: config-invalid
+    severity: error
+    summary: Configuration file could not be used
+    explanation: The --config file could not be read, did not decode as strict YAML version 1, or set a value outside its documented range. Nothing is auto-loaded, so only an explicit --config is read.
+    remediation: Fix the file to match docs/configuration.md; only known keys with valid values are accepted.

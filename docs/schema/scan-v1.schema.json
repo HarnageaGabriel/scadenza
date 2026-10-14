@@ -4,7 +4,7 @@
   "title": "scadenza scan output v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "generated_at", "domains", "sources_used", "certificates", "findings", "unresolved", "probe_errors", "diagnostics"],
+  "required": ["schema_version", "generated_at", "domains", "sources_used", "certificates", "findings", "unresolved", "probe_errors", "diagnostics", "coverage"],
   "properties": {
     "schema_version": {"const": "scadenza.scan/v1"},
     "generated_at": {"type": "string", "format": "date-time"},
@@ -15,7 +15,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["fingerprint_sha256", "serial", "names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "public", "observations", "owners"],
+        "required": ["fingerprint_sha256", "serial", "names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "correlation_method", "policy", "public", "observations", "owners"],
         "properties": {
           "fingerprint_sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
           "serial": {"type": "string"},
@@ -25,6 +25,19 @@
           "not_after": {"type": "string", "format": "date-time"},
           "lifetime_days": {"type": "integer", "minimum": 0},
           "verdict_100d": {"enum": ["ok", "exceeds", "unknown", "not_applicable"]},
+          "correlation_method": {"enum": ["sha256", "issuer_serial", "unresolved"]},
+          "policy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["max_validity_at_issuance_days", "compliant_at_issuance", "next_limit_days", "next_limit_effective", "fits_next_limit"],
+            "properties": {
+              "max_validity_at_issuance_days": {"type": "integer", "minimum": 0},
+              "compliant_at_issuance": {"type": "boolean"},
+              "next_limit_days": {"type": "integer", "minimum": 0},
+              "next_limit_effective": {"type": "string"},
+              "fits_next_limit": {"type": "boolean"}
+            }
+          },
           "public": {"type": ["boolean", "null"]},
           "owners": {
             "type": "array",
@@ -83,7 +96,7 @@
         "additionalProperties": false,
         "required": ["kind", "fingerprint", "names", "detail"],
         "properties": {
-          "kind": {"enum": ["matched", "ct_only", "live_only", "kube_only", "not_checked", "unknown", "exceeds-100d"]},
+          "kind": {"enum": ["matched", "ct_only", "live_only", "kube_only", "not_checked", "unknown", "exceeds-100d", "not-compliant-at-issuance"]},
           "fingerprint": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
           "names": {"type": "array", "items": {"type": "string"}},
           "detail": {"type": "string", "minLength": 1}
@@ -115,6 +128,31 @@
           "class": {"enum": ["dns", "connect-timeout", "refused", "canceled", "tls-alert", "no-certificate", "handshake-failed"]},
           "detail": {"type": "string", "minLength": 1}
         }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targets_requested", "targets_probed", "targets_failed", "names_not_checked", "sources", "ratio"],
+      "properties": {
+        "targets_requested": {"type": "integer", "minimum": 0},
+        "targets_probed": {"type": "integer", "minimum": 0},
+        "targets_failed": {"type": "integer", "minimum": 0},
+        "names_not_checked": {"type": "integer", "minimum": 0},
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "status", "detail"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "status": {"enum": ["ok", "partial", "failed", "not_requested"]},
+              "detail": {"type": "string"}
+            }
+          }
+        },
+        "ratio": {"type": "number", "minimum": 0, "maximum": 1}
       }
     },
     "diagnostics": {

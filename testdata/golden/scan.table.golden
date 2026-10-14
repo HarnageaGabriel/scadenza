@@ -10,3 +10,4 @@ live_only     dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  
 matched       aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  example.com, www.example.com  presented by a probed host and issued in Certificate Transparency
 not_checked   bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  api.example.com               not verified as absent: api.example.com (probe-error:refused)
 not_checked   cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  *.example.com                 not verified as absent: *.example.com (wildcard)
+COVERAGE requested=3 probed=2 failed=1 not_checked=3 ratio=66.67% sources=certspotter:ok,crtsh:not_requested,kube:not_requested,tls:partial

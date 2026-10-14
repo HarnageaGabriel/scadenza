@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HarnageaGabriel/scadenza/internal/clock"
+	"github.com/HarnageaGabriel/scadenza/internal/config"
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
 	"github.com/HarnageaGabriel/scadenza/internal/diag"
 	"github.com/HarnageaGabriel/scadenza/internal/inventory"
@@ -64,11 +66,32 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	var kubeContext, kubeconfig, ownershipFile string
 	var namespaces []string
 	var kubeQPS float64
+	var strict bool
+	var minCoverage int
+	var failOn, nowFlag, configPath string
 	command := &cobra.Command{
 		Use:   "scan",
 		Short: "Correlate Certificate Transparency issuances with live TLS handshakes",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(command *cobra.Command, _ []string) error {
+			if configPath != "" {
+				loaded, loadErr := config.Load(configPath)
+				if loadErr != nil {
+					emitDiagnostic(stderr, configErrorCode(loadErr), configErrorDetail(loadErr))
+					return &commandError{code: ExitUsageError}
+				}
+				applyScanConfig(command, loaded, &domains, &hosts, &hostsFile, &fromCT, &port,
+					&kubeEnabled, &kubeContext, &namespaces, &ownershipFile, &failOn, &strict, &minCoverage)
+			}
+			failOnKinds, failErr := config.ParseFailOn(failOn)
+			if failErr != nil {
+				emitDiagnostic(stderr, configErrorCode(failErr), configErrorDetail(failErr))
+				return &commandError{code: ExitUsageError}
+			}
+			if command.Flags().Changed("min-coverage") && (minCoverage < 0 || minCoverage > 100) {
+				emitDiagnostic(stderr, "SCD-0001", "--min-coverage must be between 0 and 100")
+				return &commandError{code: ExitUsageError}
+			}
 			if format != "table" && format != "json" && format != "csv" {
 				emitDiagnostic(stderr, "SCD-0001", "--format must be table, json, or csv")
 				return &commandError{code: ExitUsageError}
@@ -120,7 +143,16 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				return &commandError{code: ExitUsageError}
 			}
 
-			now := dependencies.clock.Now()
+			evaluationClock := dependencies.clock
+			if strings.TrimSpace(nowFlag) != "" {
+				parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(nowFlag))
+				if parseErr != nil {
+					emitDiagnostic(stderr, "SCD-0001", "--now must be an RFC 3339 timestamp")
+					return &commandError{code: ExitUsageError}
+				}
+				evaluationClock = clock.Fixed{Time: parsed}
+			}
+			now := evaluationClock.Now()
 			diagnostics := &diagnosticSet{items: []diag.Diagnostic{}}
 			unprobed := map[string]string{}
 
@@ -128,6 +160,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			if ownershipErr != nil {
 				return &commandError{code: ExitUsageError}
 			}
+			ctRequested := ctRequestedFor(fromCT, normalizedDomains)
 			kubeRequested := kubeEnabled
 			kubeAvailable := false
 			var kubeCertificates []kube.Certificate
@@ -215,7 +248,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				clone.Timeout = timeout
 				prober = &clone
 			}
-			live, probeErrors, _ := runProbes(command.Context(), prober, targets, concurrency)
+			live, probeErrors, probed := runProbes(command.Context(), prober, targets, concurrency)
 			for _, probeError := range probeErrors {
 				diagnostics.add("SCD-0010", probeError.Host)
 				emitDiagnostic(stderr, "SCD-0010", probeError.Host+":"+strconv.Itoa(probeError.Port)+" "+probeError.Class)
@@ -270,6 +303,23 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			}
 			sort.SliceStable(unresolved, func(i, j int) bool { return unresolved[i].Name < unresolved[j].Name })
 
+			namesNotChecked := len(unresolved)
+			for _, finding := range findings {
+				if finding.Kind == inventory.KindNotChecked {
+					namesNotChecked++
+				}
+			}
+			// Hosts dropped by --max-hosts were requested too, so they count
+			// against the ratio; wildcards are never probeable and stay out.
+			capped := 0
+			for _, reason := range unprobed {
+				if reason == "host-cap" {
+					capped++
+				}
+			}
+			coverage := inventory.NewCoverage(len(targets)+capped, probed, len(probeErrors), namesNotChecked,
+				coverageSources(ctRequested, chosen, usedCT, kubeRequested, kubeAvailable, len(targets), probed, len(probeErrors)))
+
 			document := render.ScanDocument{
 				SchemaVersion: "scadenza.scan/v1",
 				GeneratedAt:   now.UTC(),
@@ -280,6 +330,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				Unresolved:    unresolved,
 				ProbeErrors:   probeErrors,
 				Diagnostics:   diagnostics.items,
+				Coverage:      coverage,
 			}
 
 			if err := render.Scan(stdout, format, document); err != nil {
@@ -289,16 +340,17 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			// Kubernetes) that was selected and failed entirely. A failed TLS
 			// probe is a probe_errors entry, not an unavailable source.
 			if sourcesUnavailable(
-				sourceState{requested: fromCT && len(normalizedDomains) > 0, available: ctAvailable},
+				sourceState{requested: ctRequested, available: ctAvailable},
 				sourceState{requested: kubeRequested, available: kubeAvailable},
 			) {
 				return &commandError{code: ExitSourceUnavailable}
 			}
-			for _, finding := range findings {
-				switch finding.Kind {
-				case inventory.KindCTOnly, inventory.KindLiveOnly, inventory.KindExceeds100D:
-					return &commandError{code: ExitFindingsPresent}
-				}
+			if blockingFinding(failOnKinds, findings) {
+				return &commandError{code: ExitFindingsPresent}
+			}
+			if detail, incomplete := incompleteScan(strict, minCoverage, coverage, findings, unresolved); incomplete {
+				emitDiagnostic(stderr, "SCD-0020", detail)
+				return &commandError{code: ExitIncompleteScan}
 			}
 			return nil
 		},
@@ -319,7 +371,164 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	command.Flags().StringArrayVar(&namespaces, "namespace", nil, "namespace to read; repeatable; default all namespaces")
 	command.Flags().StringVar(&ownershipFile, "ownership-file", "", "YAML file mapping domains, namespaces, and label keys to owners")
 	command.Flags().Float64Var(&kubeQPS, "kube-qps", 5, "Kubernetes client request rate per second")
+	command.Flags().BoolVar(&strict, "strict", false, "exit 5 when any source is partial or failed, any probe failed, or any item was not checked")
+	command.Flags().IntVar(&minCoverage, "min-coverage", 0, "exit 5 when the coverage ratio is below this percentage (0-100)")
+	command.Flags().StringVar(&failOn, "fail-on", "live_only,not-compliant-at-issuance", "comma list of finding kinds that cause exit 3: ct_only, live_only, exceeds-100d, not-compliant-at-issuance, none")
+	command.Flags().StringVar(&nowFlag, "now", "", "evaluation instant as an RFC 3339 timestamp; defaults to the current time")
+	command.Flags().StringVar(&configPath, "config", "", "explicit YAML configuration file; never auto-loaded")
 	return command
+}
+
+// ctRequested reports whether Certificate Transparency was actually queried.
+func ctRequestedFor(fromCT bool, domains []string) bool { return fromCT && len(domains) > 0 }
+
+// coverageSources reports the health of every known source for the coverage
+// object, always including not_requested entries so the set is deterministic.
+func coverageSources(ctRequested bool, chosen []ct.Source, usedCT map[string]bool, kubeRequested, kubeAvailable bool, targets, probed, failed int) []inventory.SourceCoverage {
+	chosenNames := map[string]bool{}
+	for _, source := range chosen {
+		chosenNames[source.Name()] = true
+	}
+	result := make([]inventory.SourceCoverage, 0, 4)
+	for _, name := range []string{"certspotter", "crtsh", "kube", "tls"} {
+		entry := inventory.SourceCoverage{Name: name, Status: inventory.SourceStatusNotRequested}
+		switch name {
+		case "certspotter", "crtsh":
+			if ctRequested && chosenNames[name] {
+				if usedCT[name] {
+					entry.Status = inventory.SourceStatusOK
+				} else {
+					entry.Status = inventory.SourceStatusFailed
+				}
+			}
+		case "kube":
+			if kubeRequested {
+				if kubeAvailable {
+					entry.Status = inventory.SourceStatusOK
+				} else {
+					entry.Status = inventory.SourceStatusFailed
+				}
+			}
+		case "tls":
+			if targets > 0 {
+				switch {
+				case failed == 0:
+					entry.Status = inventory.SourceStatusOK
+				case probed > 0:
+					entry.Status = inventory.SourceStatusPartial
+				default:
+					entry.Status = inventory.SourceStatusFailed
+				}
+			}
+		}
+		result = append(result, entry)
+	}
+	return result
+}
+
+// blockingFinding reports whether any reported finding has a kind selected by
+// --fail-on. Every finding is still reported; only the exit code changes.
+func blockingFinding(failOn []string, findings []inventory.Finding) bool {
+	selected := map[string]bool{}
+	for _, kind := range failOn {
+		if kind == config.FailOnNone {
+			continue
+		}
+		selected[kind] = true
+	}
+	for _, finding := range findings {
+		if selected[finding.Kind] {
+			return true
+		}
+	}
+	return false
+}
+
+// incompleteScan reports whether the run must exit 5, either because --strict
+// found a gap or because the coverage ratio is below --min-coverage.
+func incompleteScan(strict bool, minCoverage int, coverage inventory.Coverage, findings []inventory.Finding, unresolved []inventory.Unresolved) (string, bool) {
+	if strict {
+		for _, source := range coverage.Sources {
+			if source.Status == inventory.SourceStatusPartial || source.Status == inventory.SourceStatusFailed {
+				return "strict: source " + source.Name + " is " + source.Status, true
+			}
+		}
+		if coverage.TargetsFailed > 0 {
+			return "strict: " + strconv.Itoa(coverage.TargetsFailed) + " probe(s) failed", true
+		}
+		for _, finding := range findings {
+			if finding.Kind == inventory.KindNotChecked {
+				return "strict: at least one item was not checked", true
+			}
+		}
+		if len(unresolved) > 0 {
+			return "strict: " + strconv.Itoa(len(unresolved)) + " name(s) were not checked", true
+		}
+	}
+	if minCoverage > 0 && coverage.Ratio*100 < float64(minCoverage) {
+		return fmt.Sprintf("coverage %.2f%% is below --min-coverage %d%%", coverage.Ratio*100, minCoverage), true
+	}
+	return "", false
+}
+
+// configErrorCode classifies a configuration error to its SCD code.
+func configErrorCode(err error) string {
+	if errors.Is(err, config.ErrUnknownFailOnKind) || errors.Is(err, config.ErrFailOnNoneCombined) {
+		return "SCD-0021"
+	}
+	return "SCD-0022"
+}
+
+func configErrorDetail(err error) string {
+	detail := err.Error()
+	detail = strings.TrimPrefix(detail, config.ErrUnknownFailOnKind.Error()+": ")
+	detail = strings.TrimPrefix(detail, config.ErrInvalid.Error()+": ")
+	return detail
+}
+
+// applyScanConfig fills a scan value from the configuration file only when the
+// matching flag was not set on the command line, so flags always win.
+func applyScanConfig(command *cobra.Command, loaded config.Config,
+	domains, hosts *[]string, hostsFile *string, fromCT *bool, port *int,
+	kubeEnabled *bool, kubeContext *string, namespaces *[]string, ownershipFile *string,
+	failOn *string, strict *bool, minCoverage *int,
+) {
+	if !command.Flags().Changed("domain") && len(loaded.Domains) > 0 {
+		*domains = loaded.Domains
+	}
+	if !command.Flags().Changed("host") && len(loaded.Hosts) > 0 {
+		*hosts = loaded.Hosts
+	}
+	if !command.Flags().Changed("hosts-file") && loaded.HostsFile != "" {
+		*hostsFile = loaded.HostsFile
+	}
+	if !command.Flags().Changed("from-ct") && loaded.FromCT != nil {
+		*fromCT = *loaded.FromCT
+	}
+	if !command.Flags().Changed("port") && loaded.Port != nil {
+		*port = *loaded.Port
+	}
+	if !command.Flags().Changed("kube") && loaded.Kube.Enabled {
+		*kubeEnabled = true
+	}
+	if !command.Flags().Changed("kube-context") && loaded.Kube.Context != "" {
+		*kubeContext = loaded.Kube.Context
+	}
+	if !command.Flags().Changed("namespace") && len(loaded.Kube.Namespaces) > 0 {
+		*namespaces = loaded.Kube.Namespaces
+	}
+	if !command.Flags().Changed("ownership-file") && loaded.Kube.OwnershipFile != "" {
+		*ownershipFile = loaded.Kube.OwnershipFile
+	}
+	if !command.Flags().Changed("fail-on") && len(loaded.Policy.FailOn) > 0 {
+		*failOn = strings.Join(loaded.Policy.FailOn, ",")
+	}
+	if !command.Flags().Changed("strict") && loaded.Policy.Strict {
+		*strict = true
+	}
+	if !command.Flags().Changed("min-coverage") && loaded.Policy.MinCoverage != nil {
+		*minCoverage = *loaded.Policy.MinCoverage
+	}
 }
 
 func kubeProblemDetail(problem kube.Problem) string {
