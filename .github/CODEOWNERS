@@ -1,0 +1,12 @@
+# Code owners are requested for review automatically.
+# Security-sensitive paths are listed explicitly so they are never missed.
+*                          @HarnageaGabriel
+/.github/                  @HarnageaGabriel
+/deploy/                   @HarnageaGabriel
+/SECURITY.md               @HarnageaGabriel
+/docs/threat-model.md      @HarnageaGabriel
+/internal/httpx/           @HarnageaGabriel
+/internal/kube/            @HarnageaGabriel
+/internal/tlsprobe/        @HarnageaGabriel
+/internal/azurekv/         @HarnageaGabriel
+/.goreleaser.yaml          @HarnageaGabriel

@@ -31,6 +31,7 @@ An open-source CLI that finds every certificate, where it lives and who renews i
   <a href="#how-it-works">How it works</a> ·
   <a href="#getting-started">Getting started</a> ·
   <a href="#roadmap">Roadmap</a> ·
+  <a href="#security">Security</a> ·
   <a href="#contributing">Contributing</a>
 </p>
 
@@ -214,6 +215,13 @@ The plan to 0.1.0 is recorded in [ADR 0006](docs/adr/0006-roadmap-to-0.1.0.md).
 
 Out of scope: renewing certificates, passive network capture, a web dashboard
 and expiry calendars for private PKI.
+
+## Security
+
+scadenza reads clusters and cloud accounts, so the guarantees are written down:
+see the [threat model](docs/threat-model.md), how to [verify releases](docs/install.md)
+and how to [report a vulnerability](SECURITY.md) privately. Third-party licenses are
+listed in [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES/).
 
 ## Contributing
 
