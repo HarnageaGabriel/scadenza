@@ -1,0 +1,26 @@
+name: DCO
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  signoff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0}
+      - name: Require matching Signed-off-by trailers
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          while IFS= read -r commit; do
+            author=$(git show -s --format='%aN <%aE>' "$commit")
+            git show -s --format='%B' "$commit" | grep -F "Signed-off-by: $author" >/dev/null || {
+              echo "Missing matching Signed-off-by for $commit ($author). Use git rebase --signoff."
+              exit 1
+            }
+          done < <(git rev-list "$BASE..$HEAD")
