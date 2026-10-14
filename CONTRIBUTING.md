@@ -29,8 +29,9 @@ make cover-floors
 `main` is protected: every change lands through a pull request that is squash
 merged, with a linear history, and the required checks (tests on Linux and
 macOS, lint and generated files, vulnerability scan, GoReleaser configuration,
-end-to-end on kind, CodeQL) must pass on a branch that is up to date with
-`main`. Open a draft pull request early. Keep changes focused, link the issue
+CodeQL) must pass on a branch that is up to date with `main`. The end-to-end
+job on kind runs on every pull request too; it is not required because it
+downloads external artifacts, but a failure must be explained in the pull request. Open a draft pull request early. Keep changes focused, link the issue
 and describe what you tested.
 
 ## Security
