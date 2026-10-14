@@ -330,7 +330,9 @@ func classifyHandshake(ctx context.Context, err error) ErrorClass {
 	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 		return ClassCanceled
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+		(errors.As(err, &netErr) && netErr.Timeout()) {
 		return ClassConnectTimeout
 	}
 	if errors.Is(err, refusedErrno) {
