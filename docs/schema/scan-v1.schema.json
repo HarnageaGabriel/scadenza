@@ -15,7 +15,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["fingerprint_sha256", "serial", "names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "public", "observations"],
+        "required": ["fingerprint_sha256", "serial", "names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "public", "observations", "owners"],
         "properties": {
           "fingerprint_sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
           "serial": {"type": "string"},
@@ -34,7 +34,7 @@
               "required": ["owner", "owner_source", "location"],
               "properties": {
                 "owner": {"type": "string", "minLength": 1},
-                "owner_source": {"enum": ["label", "annotation", "namespace-label", "mapping-file"]},
+                "owner_source": {"enum": ["label", "annotation", "namespace-label", "namespace-annotation", "mapping-file"]},
                 "location": {"type": "string", "minLength": 1}
               }
             }

@@ -53,6 +53,8 @@ namespaces:
 Domain matching is case-insensitive and ignores a leading `*.`. For a
 certificate with names `api.payments.example.com` and `payments.example.com`,
 the longer `payments.example.com` rule wins over `example.com`.
+Domain and namespace keys that normalize to the same value are rejected, so
+their owner cannot depend on YAML map iteration order.
 
 ## Example
 

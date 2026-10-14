@@ -92,6 +92,24 @@ func TestCSVFormulaInjection(t *testing.T) {
 	}
 }
 
+func TestCTJSONArraysAreNeverNull(t *testing.T) {
+	document := CTDocument{Certificates: []ct.Certificate{{}}}
+	var output bytes.Buffer
+	if err := CT(&output, "json", document); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"sources_used", "certificates", "subject_names", "diagnostics"} {
+		if strings.Contains(output.String(), `"`+field+`":null`) {
+			t.Fatalf("JSON contains null %s array: %s", field, output.String())
+		}
+	}
+	for _, value := range []string{"\tcell", "\rcell"} {
+		if got := csvSafe(value); got != "'"+value {
+			t.Fatalf("csvSafe(%q) = %q", value, got)
+		}
+	}
+}
+
 func TestCTDiagnosticMatchesPublishedSchema(t *testing.T) {
 	schemaData, err := os.ReadFile(filepath.Join("..", "..", "docs", "schema", "ct-v1.schema.json"))
 	if err != nil {

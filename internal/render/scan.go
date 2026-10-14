@@ -32,6 +32,21 @@ type ScanDocument struct {
 func Scan(writer io.Writer, format string, document ScanDocument) error {
 	switch format {
 	case "json":
+		document.Domains = emptyIfNil(document.Domains)
+		document.SourcesUsed = emptyIfNil(document.SourcesUsed)
+		document.Certificates = emptyIfNil(document.Certificates)
+		document.Findings = emptyIfNil(document.Findings)
+		document.Unresolved = emptyIfNil(document.Unresolved)
+		document.ProbeErrors = emptyIfNil(document.ProbeErrors)
+		document.Diagnostics = emptyIfNil(document.Diagnostics)
+		for index := range document.Certificates {
+			document.Certificates[index].Names = emptyIfNil(document.Certificates[index].Names)
+			document.Certificates[index].Observations = emptyIfNil(document.Certificates[index].Observations)
+			document.Certificates[index].Owners = emptyIfNil(document.Certificates[index].Owners)
+		}
+		for index := range document.Findings {
+			document.Findings[index].Names = emptyIfNil(document.Findings[index].Names)
+		}
 		encoder := json.NewEncoder(writer)
 		encoder.SetEscapeHTML(false)
 		return encoder.Encode(document)

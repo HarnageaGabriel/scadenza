@@ -121,7 +121,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			}
 
 			now := dependencies.clock.Now()
-			diagnostics := &diagnosticSet{}
+			diagnostics := &diagnosticSet{items: []diag.Diagnostic{}}
 			unprobed := map[string]string{}
 
 			owners, ownershipErr := loadOwnership(ownershipFile, stderr)
@@ -140,18 +140,18 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				}, kube.Options{Namespaces: namespaces, Owners: owners})
 				if loadErr != nil {
 					diagnostics.add(kube.CodeUnreachable, "")
-					emitDiagnostic(stderr, kube.CodeUnreachable, loadErr.Error())
+					emitDiagnostic(stderr, kube.CodeUnreachable, "")
 				} else {
 					scanResult, scanErr := source.Scan(command.Context())
 					for _, problem := range scanResult.Problems {
 						diagnostics.add(problem.Code, problem.Resource)
-						emitDiagnostic(stderr, problem.Code, problem.Resource+": "+problem.Detail)
+						emitDiagnostic(stderr, problem.Code, kubeProblemDetail(problem))
 					}
 					kubeCertificates = scanResult.Certificates
 					kubeAvailable = scanErr == nil
 					if scanErr != nil {
 						diagnostics.add(kube.CodeUnreachable, "")
-						emitDiagnostic(stderr, kube.CodeUnreachable, scanErr.Error())
+						emitDiagnostic(stderr, kube.CodeUnreachable, "")
 					}
 				}
 			}
@@ -320,6 +320,23 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	command.Flags().StringVar(&ownershipFile, "ownership-file", "", "YAML file mapping domains, namespaces, and label keys to owners")
 	command.Flags().Float64Var(&kubeQPS, "kube-qps", 5, "Kubernetes client request rate per second")
 	return command
+}
+
+func kubeProblemDetail(problem kube.Problem) string {
+	fields := []string{}
+	if problem.Resource != "" {
+		fields = append(fields, "resource="+problem.Resource)
+	}
+	if problem.Namespace != "" {
+		fields = append(fields, "namespace="+problem.Namespace)
+	}
+	if problem.HTTPStatus != 0 {
+		fields = append(fields, "http_status="+strconv.FormatInt(int64(problem.HTTPStatus), 10))
+	}
+	if problem.Reason != "" {
+		fields = append(fields, "reason="+string(problem.Reason))
+	}
+	return strings.Join(fields, " ")
 }
 
 // sourceState is the requested and available state of one input source.

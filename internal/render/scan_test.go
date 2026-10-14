@@ -56,6 +56,22 @@ func sampleScanDocument() ScanDocument {
 	}
 }
 
+func TestScanJSONArraysAreNeverNull(t *testing.T) {
+	document := ScanDocument{
+		Certificates: []inventory.Certificate{{}},
+		Findings:     []inventory.Finding{{}},
+	}
+	var output bytes.Buffer
+	if err := Scan(&output, "json", document); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"domains", "sources_used", "certificates", "names", "observations", "owners", "findings", "unresolved", "probe_errors", "diagnostics"} {
+		if strings.Contains(output.String(), `"`+field+`":null`) {
+			t.Fatalf("JSON contains null %s array: %s", field, output.String())
+		}
+	}
+}
+
 func TestScanFormats(t *testing.T) {
 	document := sampleScanDocument()
 	for _, format := range []string{"json", "csv", "table"} {
@@ -178,7 +194,7 @@ func TestScanJSONMatchesPublishedSchema(t *testing.T) {
 	for _, emitted := range document.Certificates {
 		// Every required field must be present and no undeclared field may be
 		// emitted, because the schema sets additionalProperties false. Optional
-		// fields such as owners appear only when an ownership rule matched.
+		// fields such as the owners array are present even when empty.
 		for _, field := range certificate.Required {
 			if _, ok := emitted[field]; !ok {
 				t.Errorf("certificate missing required field %q", field)

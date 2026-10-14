@@ -55,8 +55,8 @@ copied, logged, or retained.
 
 It also reads cert-manager `Certificate` resources at `cert-manager.io/v1` and
 reports the issuer kind and name, the resolved issuer type (`acme`, `ca`,
-`selfSigned`, `vault`, `venafi`, `external`, or `unknown`, taken only from which
-`spec` key exists), the ACME directory server URL, `spec.duration`,
+`selfSigned`, `vault`, `venafi`, `external`, or `unknown`, taken only when
+exactly one recognized `spec` key has a map value), the ACME directory server URL, `spec.duration`,
 `spec.renewBefore`, `status.notAfter`, `status.renewalTime`, and the `Ready`
 condition. These raw facts are stored now so that M5 can classify renewal
 without re-reading the cluster. Private keys and `privateKeySecretRef` targets
@@ -74,6 +74,11 @@ file; see [ownership](../ownership.md). Each owner records its source in the
 Credentials and kubeconfig content are never printed. Reads use only `list` and
 `get`; the minimal RBAC is in
 [`deploy/rbac/scadenza-readonly.yaml`](../../deploy/rbac/scadenza-readonly.yaml).
+Kubernetes client errors are reduced to HTTP status, StatusReason, resource
+kind, and namespace; their raw text is never printed. A 401 makes the
+Kubernetes source unavailable. A 403 is a partial warning when at least one
+requested Secret or Certificate list succeeds; if none succeeds, the source is
+unavailable. An empty successful list still counts as a successful source read.
 
 Run the source against a cluster (the CI-only kind test does this):
 

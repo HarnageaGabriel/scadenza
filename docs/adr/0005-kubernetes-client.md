@@ -45,8 +45,9 @@ scadenza's build to an upstream module whose API may change between releases.
 - Configure client-go rate limits: `--kube-qps` (default 5) with client-go's
   default burst, so a scan cannot flood an API server.
 - Load configuration with `clientcmd` from `--kubeconfig`, `KUBECONFIG`, the
-  in-cluster service account, or `--kube-context`. Credentials and kubeconfig
-  content are never printed.
+  in-cluster service account, or `--kube-context`. Credentials, kubeconfig
+  content, and raw Kubernetes client error strings are never printed; errors
+  expose only status, StatusReason, resource kind, and namespace.
 - Ownership is never inferred from certificate data or from cert-manager specs.
   It comes only from labels, annotations, namespaces, and an explicit mapping
   file (see `docs/ownership.md`).

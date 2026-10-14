@@ -33,6 +33,7 @@ import (
 	"github.com/HarnageaGabriel/scadenza/internal/kube"
 	"github.com/HarnageaGabriel/scadenza/internal/owner"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var updateGolden = flag.Bool("update", false, "update golden files")
@@ -464,6 +465,26 @@ func FuzzParseHostsFile(f *testing.F) {
 type fakeKubeSource struct {
 	result kube.Result
 	err    error
+}
+
+func TestScanKubeClientErrorsNeverLeakRawText(t *testing.T) {
+	const secret = "token=fake-token\n-----BEGIN PRIVATE KEY-----\nfake-pem\n-----END PRIVATE KEY-----"
+	source := fakeKubeSource{
+		result: kube.Result{Problems: []kube.Problem{{Code: kube.CodeUnreachable, Resource: "secrets", Namespace: "payments", HTTPStatus: 401, Reason: metav1.StatusReasonUnauthorized, Detail: secret}}},
+		err:    errors.New(secret),
+	}
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{"scan", "--kube", "--format", "json"}, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, source, nil))
+	if code != ExitSourceUnavailable {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "fake-token") || strings.Contains(stdout.String(), "PRIVATE KEY") || strings.Contains(stderr.String(), "fake-token") || strings.Contains(stderr.String(), "PRIVATE KEY") {
+		t.Fatalf("secret leaked; stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	var document map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
+		t.Fatalf("stdout is not JSON: %v", err)
+	}
 }
 
 func (source fakeKubeSource) Scan(context.Context) (kube.Result, error) {

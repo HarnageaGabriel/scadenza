@@ -200,6 +200,31 @@ func TestCorrelatePublicAndLifetime(t *testing.T) {
 	}
 }
 
+func TestCorrelateAggregatesTrustAcrossObservations(t *testing.T) {
+	now := date(1, time.February)
+	long := ct.Certificate{Fingerprint: "aa", SubjectNames: []string{"example.com"}, Issuer: "CN=CA", NotBefore: date(1, time.January), NotAfter: date(20, time.July), Source: "certspotter", DedupKey: "1"}
+	unknown := kube.Certificate{Fingerprint: "aa", Names: []string{"example.com"}, NotBefore: long.NotBefore, NotAfter: long.NotAfter}
+	certificates, findings := Correlate(Input{CT: []ct.Certificate{long}, Kube: []kube.Certificate{unknown}, Now: now})
+	if certificates[0].Verdict100D != "exceeds" {
+		t.Fatalf("CT+kube verdict = %q", certificates[0].Verdict100D)
+	}
+	foundExceeds := false
+	for _, finding := range findings {
+		foundExceeds = foundExceeds || finding.Kind == KindExceeds100D
+	}
+	if !foundExceeds {
+		t.Fatalf("findings = %+v", findings)
+	}
+
+	certificates, _ = Correlate(Input{Live: []tlsprobe.Result{
+		{Host: "a.example.com", Port: 443, Fingerprint: "bb", Trusted: false},
+		{Host: "b.example.com", Port: 443, Fingerprint: "bb", Trusted: true},
+	}, Now: now})
+	if certificates[0].Public == nil || !*certificates[0].Public {
+		t.Fatalf("mixed trust public = %v", certificates[0].Public)
+	}
+}
+
 func TestNormalization(t *testing.T) {
 	issuerPairs := [][2]string{
 		{"CN=Example CA, O=Org", "O=Org,CN=Example CA"},

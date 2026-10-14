@@ -12,6 +12,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -73,7 +74,7 @@ func repoRoot(t *testing.T) string {
 
 // scan runs the built CLI with `--kube` and returns its JSON output. Exit code 3
 // (findings present) is accepted; any other failure is fatal.
-func scan(t *testing.T, kubeContext string) []byte {
+func scan(t *testing.T, kubeContext string) ([]byte, []byte) {
 	t.Helper()
 	root := repoRoot(t)
 	binary := filepath.Join(t.TempDir(), "scadenza")
@@ -86,14 +87,17 @@ func scan(t *testing.T, kubeContext string) []byte {
 	defer cancel()
 	command := exec.CommandContext(ctx, binary, "scan", "--kube", "--kube-context", kubeContext, "--format", "json")
 	command.Dir = root
-	output, err := command.Output()
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 3 {
-			t.Fatalf("scan: %v\n%s", err, output)
+			t.Fatalf("scan: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.Bytes(), stderr.Bytes())
 		}
 	}
-	return output
+	return stdout.Bytes(), stderr.Bytes()
 }
 
 func TestScanKubernetesSource(t *testing.T) {
@@ -106,9 +110,9 @@ func TestScanKubernetesSource(t *testing.T) {
 		namespace = "scadenza-e2e"
 	}
 
-	output := scan(t, kubeContext)
-	if strings.Contains(string(output), "PRIVATE KEY") {
-		t.Fatal("scan output contains private key material")
+	output, scanErrors := scan(t, kubeContext)
+	if strings.Contains(string(output), "PRIVATE KEY") || strings.Contains(string(scanErrors), "PRIVATE KEY") {
+		t.Fatalf("scan streams contain private key material; stdout=%s stderr=%s", output, scanErrors)
 	}
 	var document scanDocument
 	if err := json.Unmarshal(output, &document); err != nil {

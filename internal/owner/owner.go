@@ -23,8 +23,10 @@ const (
 	SourceLabel Source = "label"
 	// SourceAnnotation means the owner came from an object annotation.
 	SourceAnnotation Source = "annotation"
-	// SourceNamespaceLabel means the owner came from a namespace label or annotation.
+	// SourceNamespaceLabel means the owner came from a namespace label.
 	SourceNamespaceLabel Source = "namespace-label"
+	// SourceNamespaceAnnotation means the owner came from a namespace annotation.
+	SourceNamespaceAnnotation Source = "namespace-annotation"
 	// SourceMappingFile means the owner came from the ownership mapping file.
 	SourceMappingFile Source = "mapping-file"
 )
@@ -65,11 +67,15 @@ func ParseConfig(data []byte) (Config, error) {
 	if err := decoder.Decode(&document); err != nil && !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("decode ownership file: %w", err)
 	}
-	return Config{
-		labelKeys:  normalizeKeys(document.LabelKeys),
-		domains:    normalizeMap(document.Domains, true),
-		namespaces: normalizeMap(document.Namespaces, false),
-	}, nil
+	domains, err := normalizeMap(document.Domains, true)
+	if err != nil {
+		return Config{}, fmt.Errorf("normalize domains: %w", err)
+	}
+	namespaces, err := normalizeMap(document.Namespaces, false)
+	if err != nil {
+		return Config{}, fmt.Errorf("normalize namespaces: %w", err)
+	}
+	return Config{labelKeys: normalizeKeys(document.LabelKeys), domains: domains, namespaces: namespaces}, nil
 }
 
 // LabelKeys returns the label and annotation keys this config consults.
@@ -112,7 +118,7 @@ func (c Config) Resolve(signals Signals) []Owner {
 	}
 	for _, key := range c.labelKeys {
 		if value, ok := signals.NamespaceAnnotations[key]; ok {
-			add(found, value, SourceNamespaceLabel, namespaceLocation)
+			add(found, value, SourceNamespaceAnnotation, namespaceLocation)
 		}
 	}
 	if signals.Namespace != "" {
@@ -191,9 +197,11 @@ func normalizeKeys(keys []string) []string {
 	return result
 }
 
-func normalizeMap(values map[string]string, domains bool) map[string]string {
+func normalizeMap(values map[string]string, domains bool) (map[string]string, error) {
 	result := make(map[string]string, len(values))
-	for key, value := range values {
+	originals := make(map[string]string, len(values))
+	for original, value := range values {
+		key := original
 		if domains {
 			key = normalizeDomain(key)
 		} else {
@@ -203,9 +211,13 @@ func normalizeMap(values map[string]string, domains bool) map[string]string {
 		if key == "" || value == "" {
 			continue
 		}
+		if previous, exists := originals[key]; exists {
+			return nil, fmt.Errorf("duplicate normalized key %q from %q and %q", key, previous, original)
+		}
+		originals[key] = original
 		result[key] = value
 	}
-	return result
+	return result, nil
 }
 
 func normalizeDomain(value string) string {

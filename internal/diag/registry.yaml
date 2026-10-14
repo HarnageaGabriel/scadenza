@@ -81,14 +81,14 @@ codes:
   - code: SCD-0014
     slug: kube-unreachable
     severity: error
-    summary: Kubernetes API server is unreachable
-    explanation: scadenza could not reach the Kubernetes API server, so no TLS Secret or cert-manager Certificate could be read from the cluster.
-    remediation: Check the kubeconfig, --kube-context, and cluster connectivity, then retry.
+    summary: Kubernetes source is unavailable
+    explanation: Kubernetes rejected authentication, the API server could not be reached, or no requested Secret or Certificate list operation succeeded.
+    remediation: Check the kubeconfig, credentials, --kube-context, cluster connectivity, and read-only RBAC, then retry.
   - code: SCD-0015
     slug: kube-forbidden
     severity: warning
     summary: Kubernetes read access was forbidden
-    explanation: Kubernetes RBAC refused a read. The detail names the resource kind whose list was denied; other kinds may still have been read, so this is a partial failure.
+    explanation: Kubernetes RBAC refused a read. Structured fields name the resource kind, namespace, HTTP status, and StatusReason. This is a partial failure when another requested resource kind was read successfully.
     remediation: Grant the documented read-only ClusterRole with list/get on secrets, certificates, issuers, clusterissuers, and namespaces.
   - code: SCD-0016
     slug: secret-without-certificate

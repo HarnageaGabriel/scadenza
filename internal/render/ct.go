@@ -28,6 +28,12 @@ type CTDocument struct {
 func CT(writer io.Writer, format string, document CTDocument) error {
 	switch format {
 	case "json":
+		document.SourcesUsed = emptyIfNil(document.SourcesUsed)
+		document.Certificates = emptyIfNil(document.Certificates)
+		document.Diagnostics = emptyIfNil(document.Diagnostics)
+		for index := range document.Certificates {
+			document.Certificates[index].SubjectNames = emptyIfNil(document.Certificates[index].SubjectNames)
+		}
 		encoder := json.NewEncoder(writer)
 		encoder.SetEscapeHTML(false)
 		return encoder.Encode(document)

@@ -121,9 +121,12 @@ type Certificate struct {
 // Problem is a non-fatal Kubernetes reading problem. Code is the stable
 // diagnostic code that documents it.
 type Problem struct {
-	Code     string
-	Resource string
-	Detail   string
+	Code       string
+	Resource   string
+	Namespace  string
+	HTTPStatus int32
+	Reason     metav1.StatusReason
+	Detail     string
 }
 
 // Result is everything one Kubernetes scan observed.
@@ -206,33 +209,35 @@ func (s *Scanner) Scan(ctx context.Context) (Result, error) {
 	namespaces, problems := s.namespaces(ctx)
 	result.Problems = append(result.Problems, problems...)
 
-	unreachable := false
-	secretsRead := 0
+	listSucceeded := false
+	authenticationFailed := false
 	parsed := []secretCertificate{}
 	for _, namespace := range s.scope() {
-		for secret, err := range s.secrets(ctx, namespace) {
+		listed := false
+		for secret, err := range s.secrets(ctx, namespace, &listed) {
 			if err != nil {
-				problem, fatal := classify(err, "secrets")
+				problem, _ := classify(err, "secrets", namespace, false)
 				result.Problems = append(result.Problems, problem)
-				unreachable = unreachable || fatal
+				authenticationFailed = authenticationFailed || apierrors.IsUnauthorized(err)
 				break
 			}
-			secretsRead++
 			found, secretProblems := s.certificatesFromSecret(secret, namespaces)
 			result.Problems = append(result.Problems, secretProblems...)
 			parsed = append(parsed, found...)
 		}
+		listSucceeded = listSucceeded || listed
 	}
 
-	facts, certificatesRead, certificateProblems, certificateUnreachable, crdMissing := s.certificateFacts(ctx, namespaces)
+	facts, certificatesListed, certificateProblems, certificateAuthFailed, _ := s.certificateFacts(ctx, namespaces)
 	result.Problems = append(result.Problems, certificateProblems...)
-	unreachable = unreachable || certificateUnreachable
+	listSucceeded = listSucceeded || certificatesListed
+	authenticationFailed = authenticationFailed || certificateAuthFailed
 
 	result.Certificates = attachFacts(parsed, facts)
 	sortCertificates(result.Certificates)
 	result.Problems = uniqueProblems(result.Problems)
 
-	if secretsRead == 0 && certificatesRead == 0 && !crdMissing && unreachable {
+	if authenticationFailed || !listSucceeded {
 		return Result{Problems: result.Problems}, fmt.Errorf("read Kubernetes: %w", errUnreachable)
 	}
 	return result, nil
@@ -273,7 +278,7 @@ func (s *Scanner) namespaces(ctx context.Context) (map[string]namespaceSignals, 
 		return list.Items, list.Continue, nil
 	}) {
 		if err != nil {
-			problem, _ := classify(err, "namespaces")
+			problem, _ := classify(err, "namespaces", "", false)
 			return result, append(problems, problem)
 		}
 		result[object.Name] = namespaceSignals{Labels: object.Labels, Annotations: object.Annotations}
@@ -283,17 +288,20 @@ func (s *Scanner) namespaces(ctx context.Context) (map[string]namespaceSignals, 
 
 // secrets streams TLS secrets in one namespace, page by page. The private key is
 // dropped from each object before it is yielded, so no caller can read it.
-func (s *Scanner) secrets(ctx context.Context, namespace string) iter.Seq2[corev1.Secret, error] {
+func (s *Scanner) secrets(ctx context.Context, namespace string, listed *bool) iter.Seq2[corev1.Secret, error] {
 	return paginate(ctx, s.limit(), func(ctx context.Context, options metav1.ListOptions) ([]corev1.Secret, string, error) {
 		options.FieldSelector = tlsSecretFieldSelector
 		list, err := s.Clients.Kubernetes.CoreV1().Secrets(namespace).List(ctx, options)
+		if list != nil {
+			for index := range list.Items {
+				delete(list.Items[index].Data, tlsPrivateKey)
+				delete(list.Items[index].StringData, tlsPrivateKey)
+			}
+		}
 		if err != nil {
 			return nil, "", err
 		}
-		for index := range list.Items {
-			delete(list.Items[index].Data, tlsPrivateKey)
-			delete(list.Items[index].StringData, tlsPrivateKey)
-		}
+		*listed = true
 		return list.Items, list.Continue, nil
 	})
 }
@@ -457,7 +465,7 @@ func uniqueProblems(problems []Problem) []Problem {
 	set := map[string]bool{}
 	result := make([]Problem, 0, len(problems))
 	for _, problem := range problems {
-		key := problem.Code + "\x00" + problem.Resource + "\x00" + problem.Detail
+		key := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s\x00%s", problem.Code, problem.Resource, problem.Namespace, problem.HTTPStatus, problem.Reason, problem.Detail)
 		if set[key] {
 			continue
 		}
@@ -495,11 +503,21 @@ func paginate[T any](ctx context.Context, limit int64, page func(context.Context
 				return
 			}
 			for index := range items {
+				if err := ctx.Err(); err != nil {
+					var zero T
+					yield(zero, err)
+					return
+				}
 				if !yield(items[index], nil) {
 					return
 				}
 			}
 			if continueToken == "" {
+				return
+			}
+			if err := ctx.Err(); err != nil {
+				var zero T
+				yield(zero, err)
 				return
 			}
 			options.Continue = continueToken
@@ -508,40 +526,40 @@ func paginate[T any](ctx context.Context, limit int64, page func(context.Context
 }
 
 // unstructuredItems lists one page at a time from the dynamic client.
-func (s *Scanner) unstructuredItems(ctx context.Context, resource schema.GroupVersionResource, namespace string) iter.Seq2[unstructured.Unstructured, error] {
+func (s *Scanner) unstructuredItems(ctx context.Context, resource schema.GroupVersionResource, namespace string, listed *bool) iter.Seq2[unstructured.Unstructured, error] {
 	return paginate(ctx, s.limit(), func(ctx context.Context, options metav1.ListOptions) ([]unstructured.Unstructured, string, error) {
 		list, err := s.Clients.Dynamic.Resource(resource).Namespace(namespace).List(ctx, options)
 		if err != nil {
 			return nil, "", err
+		}
+		if listed != nil {
+			*listed = true
 		}
 		return list.Items, list.GetContinue(), nil
 	})
 }
 
 // certificateFacts reads every cert-manager Certificate and resolves its issuer.
-func (s *Scanner) certificateFacts(ctx context.Context, namespaces map[string]namespaceSignals) ([]managerFact, int, []Problem, bool, bool) {
+func (s *Scanner) certificateFacts(ctx context.Context, namespaces map[string]namespaceSignals) ([]managerFact, bool, []Problem, bool, bool) {
 	var problems []Problem
-	unreachable := false
 
-	index, indexProblems, indexUnreachable, crdMissing := s.issuerIndex(ctx)
+	index, indexProblems, authenticationFailed, crdMissing := s.issuerIndex(ctx)
 	problems = append(problems, indexProblems...)
-	unreachable = unreachable || indexUnreachable
 
 	facts := []managerFact{}
-	read := 0
+	listed := false
 	for _, namespace := range s.scope() {
 		if crdMissing {
 			break
 		}
-		for object, err := range s.unstructuredItems(ctx, certManagerResource(certificateResourceName), namespace) {
+		for object, err := range s.unstructuredItems(ctx, certManagerResource(certificateResourceName), namespace, &listed) {
 			if err != nil {
-				problem, fatal := classify(err, "certificates")
+				problem, _ := classify(err, "certificates", namespace, true)
 				problems = append(problems, problem)
-				unreachable = unreachable || fatal
+				authenticationFailed = authenticationFailed || apierrors.IsUnauthorized(err)
 				crdMissing = crdMissing || problem.Code == CodeCRDMissing
 				break
 			}
-			read++
 			fact, ok := certificateFact(&object, index)
 			if !ok {
 				continue
@@ -556,19 +574,30 @@ func (s *Scanner) certificateFacts(ctx context.Context, namespaces map[string]na
 		}
 		return facts[i].name < facts[j].name
 	})
-	return facts, read, problems, unreachable, crdMissing
+	return facts, listed, problems, authenticationFailed, crdMissing
 }
 
 // classify turns a client error into a documented problem. fatal reports that
 // the API server could not be reached at all.
-func classify(err error, resource string) (Problem, bool) {
+func classify(err error, resource, namespace string, certManager bool) (Problem, bool) {
+	problem := Problem{Resource: resource, Namespace: namespace}
+	if status, ok := err.(apierrors.APIStatus); ok {
+		problem.HTTPStatus = status.Status().Code
+		problem.Reason = status.Status().Reason
+	}
 	switch {
-	case apierrors.IsUnauthorized(err), apierrors.IsForbidden(err):
-		return Problem{Code: CodeForbidden, Resource: resource, Detail: err.Error()}, false
-	case isCRDMissing(err):
-		return Problem{Code: CodeCRDMissing, Resource: resource, Detail: err.Error()}, false
+	case apierrors.IsUnauthorized(err):
+		problem.Code = CodeUnreachable
+		return problem, true
+	case apierrors.IsForbidden(err):
+		problem.Code = CodeForbidden
+		return problem, false
+	case certManager && isCRDMissing(err):
+		problem.Code = CodeCRDMissing
+		return problem, false
 	default:
-		return Problem{Code: CodeUnreachable, Resource: resource, Detail: err.Error()}, true
+		problem.Code = CodeUnreachable
+		return problem, true
 	}
 }
 

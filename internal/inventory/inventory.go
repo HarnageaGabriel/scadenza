@@ -73,7 +73,7 @@ type Certificate struct {
 	Observations []Observation `json:"observations"`
 	// Owners lists every explicitly declared owner, each with the rule that
 	// produced it. It is empty when no ownership rule matched.
-	Owners []owner.Owner `json:"owners,omitempty"`
+	Owners []owner.Owner `json:"owners"`
 }
 
 // Finding is one expected-versus-observed difference or status.
@@ -116,6 +116,8 @@ type accumulator struct {
 	hasLive      bool
 	hasKube      bool
 	kubePublic   bool
+	trustChecked bool
+	anyTrusted   bool
 	anyUntrusted bool
 	names        map[string]bool
 	owners       map[string]owner.Owner
@@ -152,7 +154,10 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		key := "fp:" + result.Fingerprint
 		entry := ensure(accumulated, &order, key, result.Fingerprint)
 		entry.hasLive = true
-		if !result.Trusted {
+		entry.trustChecked = true
+		if result.Trusted {
+			entry.anyTrusted = true
+		} else {
 			entry.anyUntrusted = true
 		}
 		for _, name := range result.Names {
@@ -241,8 +246,12 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		if !record.NotAfter.IsZero() && (entry.certificate.NotAfter.IsZero() || entry.certificate.NotAfter.After(record.NotAfter)) {
 			entry.certificate.NotAfter = record.NotAfter
 		}
-		if record.Public != nil && *record.Public {
-			entry.kubePublic = true
+		if record.Public != nil {
+			entry.trustChecked = true
+			if *record.Public {
+				entry.kubePublic = true
+				entry.anyTrusted = true
+			}
 		}
 		for _, declared := range record.Owners {
 			entry.owners[ownerKey(declared)] = declared
@@ -266,14 +275,14 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		certificate.Names = sortedKeys(entry.names)
 		certificate.LifetimeDays, certificate.Verdict100D = lifetime(certificate.NotBefore, certificate.NotAfter)
 		switch {
-		case entry.hasLive:
-			public := !entry.anyUntrusted
-			certificate.Public = &public
-		case entry.kubePublic:
+		case entry.anyTrusted || entry.kubePublic:
 			public := true
 			certificate.Public = &public
+		case entry.trustChecked:
+			public := false
+			certificate.Public = &public
 		}
-		if entry.hasKube && certificate.Public == nil {
+		if entry.hasKube && !entry.hasCT && !entry.hasLive && certificate.Public == nil {
 			// A certificate that only Kubernetes holds, and that does not verify
 			// against the system roots, cannot be classified as public or
 			// private, so the 100-day rule does not apply to it.

@@ -11,6 +11,11 @@
 # `certificates`, and `issuers` rules and drop `namespaces` and
 # `clusterissuers` (both are cluster-scoped).
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: scadenza
+---
+apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: scadenza-readonly

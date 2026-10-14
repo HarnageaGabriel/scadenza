@@ -15,7 +15,7 @@ Generated from `internal/diag/registry.yaml`. Do not edit by hand.
 - [SCD-0011 — Presented certificate is not trusted](SCD-0011.md)
 - [SCD-0012 — Certificate Transparency certificate was not observed live](SCD-0012.md)
 - [SCD-0013 — Live certificate absent from Certificate Transparency](SCD-0013.md)
-- [SCD-0014 — Kubernetes API server is unreachable](SCD-0014.md)
+- [SCD-0014 — Kubernetes source is unavailable](SCD-0014.md)
 - [SCD-0015 — Kubernetes read access was forbidden](SCD-0015.md)
 - [SCD-0016 — TLS secret holds no certificate](SCD-0016.md)
 - [SCD-0017 — Kubernetes certificate could not be parsed](SCD-0017.md)

@@ -136,7 +136,7 @@ namespaces:
 			},
 			expected: []Owner{
 				{Value: "team-pay", Source: SourceMappingFile, Location: "namespace/payments"},
-				{Value: "team-pay", Source: SourceNamespaceLabel, Location: "namespace/payments"},
+				{Value: "team-pay", Source: SourceNamespaceAnnotation, Location: "namespace/payments"},
 			},
 		},
 		{
@@ -220,6 +220,19 @@ namespaces:
 				if entry.Value == "" || entry.Source == "" || entry.Location == "" {
 					t.Fatalf("incomplete owner record %+v", entry)
 				}
+			}
+		})
+	}
+}
+
+func TestParseConfigRejectsNormalizedKeyCollisions(t *testing.T) {
+	for name, document := range map[string]string{
+		"domains":    "domains:\n  Example.com: team-a\n  example.com: team-b\n",
+		"namespaces": "namespaces:\n  Payments: team-a\n  payments: team-b\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseConfig([]byte(document)); err == nil || !strings.Contains(err.Error(), "duplicate normalized key") {
+				t.Fatalf("ParseConfig() error = %v", err)
 			}
 		})
 	}

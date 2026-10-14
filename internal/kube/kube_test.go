@@ -412,13 +412,15 @@ func TestScanCertManagerWithoutSecret(t *testing.T) {
 func TestIssuerTypeResolution(t *testing.T) {
 	index := issuerIndex{
 		namespaced: map[string]map[string]any{
-			"payments/ca":      {"ca": map[string]any{"secretName": "ca-key"}},
-			"payments/self":    {"selfSigned": map[string]any{}},
-			"payments/vault":   {"vault": map[string]any{"server": "https://vault"}},
-			"payments/venafi":  {"venafi": map[string]any{}},
-			"payments/mystery": {"unknownThing": map[string]any{}},
-			"payments/acme":    {"acme": map[string]any{"server": "https://acme.example.com/dir"}},
-			"payments/empty":   {},
+			"payments/ca":       {"ca": map[string]any{"secretName": "ca-key"}},
+			"payments/self":     {"selfSigned": map[string]any{}},
+			"payments/vault":    {"vault": map[string]any{"server": "https://vault"}},
+			"payments/venafi":   {"venafi": map[string]any{}},
+			"payments/mystery":  {"unknownThing": map[string]any{}},
+			"payments/acme":     {"acme": map[string]any{"server": "https://acme.example.com/dir"}},
+			"payments/scalar":   {"ca": "not-a-map"},
+			"payments/multiple": {"ca": map[string]any{}, "vault": map[string]any{}},
+			"payments/empty":    {},
 		},
 		cluster: map[string]map[string]any{
 			"cluster-ca": {"ca": map[string]any{}},
@@ -434,12 +436,16 @@ func TestIssuerTypeResolution(t *testing.T) {
 		wantACME  string
 	}{
 		{"namespaced acme", "payments", "", IssuerKind, "acme", IssuerTypeACME, "https://acme.example.com/dir"},
+		{"default issuer kind", "payments", CertManagerGroup, "", "ca", IssuerTypeCA, ""},
 		{"namespaced ca", "payments", "", IssuerKind, "ca", IssuerTypeCA, ""},
 		{"self signed", "payments", "", IssuerKind, "self", IssuerTypeSelfSigned, ""},
 		{"vault", "payments", "", IssuerKind, "vault", IssuerTypeVault, ""},
 		{"venafi", "payments", "", IssuerKind, "venafi", IssuerTypeVenafi, ""},
 		{"cluster issuer ca", "payments", "", ClusterIssuerKind, "cluster-ca", IssuerTypeCA, ""},
 		{"foreign group is external", "payments", "other.example.io", IssuerKind, "anything", IssuerTypeExternal, ""},
+		{"unknown issuer kind", "payments", "", "OtherIssuer", "ca", IssuerTypeUnknown, ""},
+		{"recognized scalar is unknown", "payments", "", IssuerKind, "scalar", IssuerTypeUnknown, ""},
+		{"multiple recognized maps are unknown", "payments", "", IssuerKind, "multiple", IssuerTypeUnknown, ""},
 		{"missing issuer is unknown", "payments", "", IssuerKind, "absent", IssuerTypeUnknown, ""},
 		{"unrecognized spec is unknown", "payments", "", IssuerKind, "mystery", IssuerTypeUnknown, ""},
 		{"empty spec is unknown", "payments", "", IssuerKind, "empty", IssuerTypeUnknown, ""},
@@ -494,6 +500,88 @@ func TestScanUnreachable(t *testing.T) {
 	}
 	if len(result.Problems) == 0 || result.Problems[0].Code != CodeUnreachable {
 		t.Fatalf("problems = %+v", result.Problems)
+	}
+}
+
+func TestScanAvailabilityUsesSuccessfulLists(t *testing.T) {
+	t.Run("empty secrets list survives cert-manager transport failure", func(t *testing.T) {
+		dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(schemeWithCertManager(), certManagerListKinds())
+		dynamicClient.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("transport failed")
+		})
+		scanner := New(Clients{Kubernetes: k8sfake.NewSimpleClientset(), Dynamic: dynamicClient}, testOptions(t, ""))
+		if _, err := scanner.Scan(context.Background()); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+	})
+
+	t.Run("all forbidden fails source", func(t *testing.T) {
+		coreClient := k8sfake.NewSimpleClientset()
+		coreClient.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("denied"))
+		})
+		dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(schemeWithCertManager(), certManagerListKinds())
+		dynamicClient.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "certificates"}, "", errors.New("denied"))
+		})
+		scanner := New(Clients{Kubernetes: coreClient, Dynamic: dynamicClient}, testOptions(t, ""))
+		if _, err := scanner.Scan(context.Background()); !errors.Is(err, errUnreachable) {
+			t.Fatalf("Scan error = %v", err)
+		}
+	})
+
+	t.Run("unauthorized is fatal despite another successful kind", func(t *testing.T) {
+		coreClient := k8sfake.NewSimpleClientset()
+		coreClient.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewUnauthorized("expired token")
+		})
+		scanner := New(Clients{Kubernetes: coreClient, Dynamic: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(schemeWithCertManager(), certManagerListKinds())}, testOptions(t, ""))
+		result, err := scanner.Scan(context.Background())
+		if !errors.Is(err, errUnreachable) {
+			t.Fatalf("Scan error = %v", err)
+		}
+		for _, problem := range result.Problems {
+			if problem.Code == CodeForbidden {
+				t.Fatalf("unauthorized classified as forbidden: %+v", problem)
+			}
+		}
+	})
+}
+
+func TestClientErrorsAreStructuredAndSanitized(t *testing.T) {
+	const secret = "fake-token -----BEGIN PRIVATE KEY----- fake-pem"
+	problem, fatal := classify(apierrors.NewUnauthorized(secret), "secrets", "payments", false)
+	encoded, err := json.Marshal(problem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fatal || problem.Code != CodeUnreachable || problem.HTTPStatus != 401 || problem.Reason != metav1.StatusReasonUnauthorized {
+		t.Fatalf("problem = %+v fatal=%v", problem, fatal)
+	}
+	if strings.Contains(string(encoded), "fake-token") || strings.Contains(string(encoded), "PRIVATE KEY") {
+		t.Fatalf("raw error leaked: %s", encoded)
+	}
+	coreNotFound, _ := classify(apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, "missing"), "secrets", "typo", false)
+	if coreNotFound.Code == CodeCRDMissing {
+		t.Fatalf("core 404 classified as missing CRD: %+v", coreNotFound)
+	}
+}
+
+func TestSecretsScrubPartialListBeforeError(t *testing.T) {
+	partial := &corev1.SecretList{Items: []corev1.Secret{{Data: map[string][]byte{tlsPrivateKey: []byte(keyMaterial)}, StringData: map[string]string{tlsPrivateKey: keyMaterial}}}}
+	client := k8sfake.NewSimpleClientset()
+	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, partial, errors.New("malformed page")
+	})
+	scanner := New(Clients{Kubernetes: client}, testOptions(t, ""))
+	listed := false
+	for range scanner.secrets(context.Background(), "payments", &listed) {
+	}
+	if _, ok := partial.Items[0].Data[tlsPrivateKey]; ok {
+		t.Fatal("tls.key retained in Data")
+	}
+	if _, ok := partial.Items[0].StringData[tlsPrivateKey]; ok {
+		t.Fatal("tls.key retained in StringData")
 	}
 }
 
@@ -579,6 +667,22 @@ func TestPaginate(t *testing.T) {
 	}
 	if !errors.Is(got, failure) {
 		t.Fatalf("err = %v", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls, yielded := 0, 0
+	for _, err := range paginate(ctx, 3, func(context.Context, metav1.ListOptions) ([]int, string, error) {
+		calls++
+		return []int{1, 2, 3}, "more", nil
+	}) {
+		if err == nil {
+			yielded++
+			cancel()
+		}
+	}
+	if calls != 1 || yielded != 1 {
+		t.Fatalf("canceled pagination calls=%d yielded=%d", calls, yielded)
 	}
 }
 

@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -77,19 +78,30 @@ func (index issuerIndex) resolve(namespace, group, kind, name string) (string, s
 	}
 	var spec map[string]any
 	var ok bool
-	if kind == ClusterIssuerKind {
+	if kind == "" {
+		kind = IssuerKind
+	}
+	switch kind {
+	case ClusterIssuerKind:
 		spec, ok = index.cluster[name]
-	} else {
+	case IssuerKind:
 		spec, ok = index.namespaced[namespace+"/"+name]
+	default:
+		return IssuerTypeUnknown, ""
 	}
 	if !ok {
 		return IssuerTypeUnknown, ""
 	}
-	return issuerTypeOf(spec), acmeServer(spec)
+	issuerType := issuerTypeOf(spec)
+	if issuerType != IssuerTypeACME {
+		return issuerType, ""
+	}
+	return issuerType, acmeServer(spec)
 }
 
 // issuerTypeOf resolves an issuer type from which key exists under the spec.
 func issuerTypeOf(spec map[string]any) string {
+	matched := ""
 	for _, candidate := range []struct {
 		key  string
 		kind string
@@ -100,11 +112,17 @@ func issuerTypeOf(spec map[string]any) string {
 		{"vault", IssuerTypeVault},
 		{"venafi", IssuerTypeVenafi},
 	} {
-		if _, ok := spec[candidate.key]; ok {
-			return candidate.kind
+		if value, ok := spec[candidate.key]; ok {
+			if _, mapValue := value.(map[string]any); !mapValue || matched != "" {
+				return IssuerTypeUnknown
+			}
+			matched = candidate.kind
 		}
 	}
-	return IssuerTypeUnknown
+	if matched == "" {
+		return IssuerTypeUnknown
+	}
+	return matched
 }
 
 // acmeServer returns spec.acme.server. It is public data; no ACME secret or
@@ -122,18 +140,18 @@ func acmeServer(spec map[string]any) string {
 func (s *Scanner) issuerIndex(ctx context.Context) (issuerIndex, []Problem, bool, bool) {
 	index := issuerIndex{namespaced: map[string]map[string]any{}, cluster: map[string]map[string]any{}}
 	var problems []Problem
-	unreachable := false
+	authenticationFailed := false
 	missing := false
 
 	for _, namespace := range s.scope() {
 		if missing {
 			break
 		}
-		for object, err := range s.unstructuredItems(ctx, certManagerResource(issuerResourceName), namespace) {
+		for object, err := range s.unstructuredItems(ctx, certManagerResource(issuerResourceName), namespace, nil) {
 			if err != nil {
-				problem, fatal := classify(err, "issuers")
+				problem, _ := classify(err, "issuers", namespace, true)
 				problems = append(problems, problem)
-				unreachable = unreachable || fatal
+				authenticationFailed = authenticationFailed || apierrors.IsUnauthorized(err)
 				missing = missing || problem.Code == CodeCRDMissing
 				break
 			}
@@ -143,11 +161,11 @@ func (s *Scanner) issuerIndex(ctx context.Context) (issuerIndex, []Problem, bool
 		}
 	}
 	if !missing {
-		for object, err := range s.unstructuredItems(ctx, certManagerResource(clusterIssuerResource), "") {
+		for object, err := range s.unstructuredItems(ctx, certManagerResource(clusterIssuerResource), "", nil) {
 			if err != nil {
-				problem, fatal := classify(err, "clusterissuers")
+				problem, _ := classify(err, "clusterissuers", "", true)
 				problems = append(problems, problem)
-				unreachable = unreachable || fatal
+				authenticationFailed = authenticationFailed || apierrors.IsUnauthorized(err)
 				missing = missing || problem.Code == CodeCRDMissing
 				break
 			}
@@ -156,7 +174,7 @@ func (s *Scanner) issuerIndex(ctx context.Context) (issuerIndex, []Problem, bool
 			}
 		}
 	}
-	return index, problems, unreachable, missing
+	return index, problems, authenticationFailed, missing
 }
 
 // certificateFact reads the raw facts from one cert-manager Certificate.
