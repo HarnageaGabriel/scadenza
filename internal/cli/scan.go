@@ -15,8 +15,11 @@ import (
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
 	"github.com/HarnageaGabriel/scadenza/internal/diag"
 	"github.com/HarnageaGabriel/scadenza/internal/inventory"
+	"github.com/HarnageaGabriel/scadenza/internal/kube"
+	"github.com/HarnageaGabriel/scadenza/internal/owner"
 	"github.com/HarnageaGabriel/scadenza/internal/render"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
+	"github.com/HarnageaGabriel/scadenza/internal/version"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 )
@@ -57,6 +60,10 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	var port, concurrency, maxHosts int
 	var timeout time.Duration
 	var format string
+	var kubeEnabled bool
+	var kubeContext, kubeconfig, ownershipFile string
+	var namespaces []string
+	var kubeQPS float64
 	command := &cobra.Command{
 		Use:   "scan",
 		Short: "Correlate Certificate Transparency issuances with live TLS handshakes",
@@ -70,6 +77,14 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				emitDiagnostic(stderr, "SCD-0001", "invalid --port, --concurrency, --max-hosts, or --timeout")
 				return &commandError{code: ExitUsageError}
 			}
+			if kubeQPS <= 0 {
+				emitDiagnostic(stderr, "SCD-0001", "--kube-qps must be positive")
+				return &commandError{code: ExitUsageError}
+			}
+			if !kubeEnabled && (len(namespaces) > 0 || kubeContext != "" || kubeconfig != "" || ownershipFile != "" || command.Flags().Changed("kube-qps")) {
+				emitDiagnostic(stderr, "SCD-0001", "--kube-context, --kubeconfig, --namespace, --ownership-file, and --kube-qps require --kube")
+				return &commandError{code: ExitUsageError}
+			}
 			normalizedDomains, err := normalizeDomains(domains)
 			if err != nil {
 				emitDiagnostic(stderr, "SCD-0001", err.Error())
@@ -80,8 +95,8 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				emitDiagnostic(stderr, "SCD-0001", err.Error())
 				return &commandError{code: ExitUsageError}
 			}
-			if len(normalizedDomains) == 0 && len(hosts) == 0 && len(fileTokens) == 0 {
-				emitDiagnostic(stderr, "SCD-0001", "supply at least one --domain, --host, or --hosts-file")
+			if len(normalizedDomains) == 0 && len(hosts) == 0 && len(fileTokens) == 0 && !kubeEnabled {
+				emitDiagnostic(stderr, "SCD-0001", "supply at least one --domain, --host, --hosts-file, or --kube")
 				return &commandError{code: ExitUsageError}
 			}
 			targets, err := parseTargets(append(append([]string{}, hosts...), fileTokens...), port)
@@ -101,6 +116,38 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			now := dependencies.clock.Now()
 			diagnostics := &diagnosticSet{}
 			unprobed := map[string]string{}
+
+			owners, ownershipErr := loadOwnership(ownershipFile, stderr)
+			if ownershipErr != nil {
+				return &commandError{code: ExitUsageError}
+			}
+			kubeRequested := kubeEnabled
+			kubeAvailable := false
+			var kubeCertificates []kube.Certificate
+			if kubeEnabled {
+				source, loadErr := dependencies.loadKube(kube.LoadOptions{
+					Context:    kubeContext,
+					Kubeconfig: kubeconfig,
+					QPS:        kubeQPS,
+					UserAgent:  "scadenza/" + version.Version,
+				}, kube.Options{Namespaces: namespaces, Owners: owners})
+				if loadErr != nil {
+					diagnostics.add(kube.CodeUnreachable, "")
+					emitDiagnostic(stderr, kube.CodeUnreachable, loadErr.Error())
+				} else {
+					scanResult, scanErr := source.Scan(command.Context())
+					for _, problem := range scanResult.Problems {
+						diagnostics.add(problem.Code, problem.Resource)
+						emitDiagnostic(stderr, problem.Code, problem.Resource+": "+problem.Detail)
+					}
+					kubeCertificates = scanResult.Certificates
+					kubeAvailable = scanErr == nil
+					if scanErr != nil {
+						diagnostics.add(kube.CodeUnreachable, "")
+						emitDiagnostic(stderr, kube.CodeUnreachable, scanErr.Error())
+					}
+				}
+			}
 
 			var records []ct.Certificate
 			usedCT := map[string]bool{}
@@ -167,6 +214,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			correlated, findings := inventory.Correlate(inventory.Input{
 				Domains:  normalizedDomains,
 				CT:       records,
+				Kube:     kubeCertificates,
 				Live:     live,
 				Errors:   probeErrors,
 				Unprobed: unprobed,
@@ -190,6 +238,9 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			}
 			if len(targets) > 0 {
 				sourcesUsed = append(sourcesUsed, "tls")
+			}
+			if kubeRequested && kubeAvailable {
+				sourcesUsed = append(sourcesUsed, "kube")
 			}
 			sort.Strings(sourcesUsed)
 
@@ -215,7 +266,11 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				Diagnostics:   diagnostics.items,
 			}
 
-			if !ctAvailable && successes == 0 && (len(normalizedDomains) > 0 || len(targets) > 0) {
+			if sourcesUnavailable(
+				sourceState{requested: fromCT && len(normalizedDomains) > 0, available: ctAvailable},
+				sourceState{requested: len(targets) > 0, available: successes > 0},
+				sourceState{requested: kubeRequested, available: kubeAvailable},
+			) {
 				return &commandError{code: ExitSourceUnavailable}
 			}
 			if err := render.Scan(stdout, format, document); err != nil {
@@ -240,7 +295,55 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	command.Flags().StringVar(&format, "format", "table", "output format: table, json, csv")
 	command.Flags().IntVar(&maxHosts, "max-hosts", 200, "maximum hosts to probe")
 	command.Flags().StringSliceVar(&sourceNames, "source", []string{"certspotter", "crtsh"}, "Certificate Transparency source order (certspotter, crtsh)")
+	command.Flags().BoolVar(&kubeEnabled, "kube", false, "also read TLS Secrets and cert-manager Certificates from a Kubernetes cluster, read-only")
+	command.Flags().StringVar(&kubeContext, "kube-context", "", "kubeconfig context to use")
+	command.Flags().StringVar(&kubeconfig, "kubeconfig", "", "kubeconfig file to use; defaults to KUBECONFIG or the in-cluster configuration")
+	command.Flags().StringArrayVar(&namespaces, "namespace", nil, "namespace to read; repeatable; default all namespaces")
+	command.Flags().StringVar(&ownershipFile, "ownership-file", "", "YAML file mapping domains, namespaces, and label keys to owners")
+	command.Flags().Float64Var(&kubeQPS, "kube-qps", 5, "Kubernetes client request rate per second")
 	return command
+}
+
+// sourceState is the requested and available state of one input source.
+type sourceState struct {
+	requested bool
+	available bool
+}
+
+// sourcesUnavailable reports whether at least one source was requested and every
+// requested source failed. Partial failures are warnings, never exit code 4.
+func sourcesUnavailable(states ...sourceState) bool {
+	requested := false
+	for _, state := range states {
+		if !state.requested {
+			continue
+		}
+		requested = true
+		if state.available {
+			return false
+		}
+	}
+	return requested
+}
+
+// loadOwnership reads the optional ownership mapping file. An absent file keeps
+// the documented defaults; an unreadable or invalid file is a usage error.
+func loadOwnership(path string, stderr io.Writer) (owner.Config, error) {
+	if strings.TrimSpace(path) == "" {
+		return owner.ParseConfig(nil)
+	}
+	//nolint:gosec // G304: the path comes from --ownership-file, supplied by the user.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		emitDiagnostic(stderr, kube.CodeOwnershipFileInvalid, path)
+		return owner.Config{}, fmt.Errorf("read ownership file: %w", err)
+	}
+	config, err := owner.ParseConfig(data)
+	if err != nil {
+		emitDiagnostic(stderr, kube.CodeOwnershipFileInvalid, path)
+		return owner.Config{}, err
+	}
+	return config, nil
 }
 
 func findingDetail(finding inventory.Finding) string {

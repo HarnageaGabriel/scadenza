@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
+	"github.com/HarnageaGabriel/scadenza/internal/kube"
+	"github.com/HarnageaGabriel/scadenza/internal/owner"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
 	"github.com/google/go-cmp/cmp"
 )
@@ -215,5 +217,138 @@ func TestNormalization(t *testing.T) {
 		if got := inScope(scope.name, scope.domain); got != scope.want {
 			t.Errorf("inScope(%q) = %v, want %v", scope.name, got, scope.want)
 		}
+	}
+}
+
+func kubeFacts(namespace, name string) *kube.Kubernetes {
+	return &kube.Kubernetes{Resource: "kubernetes.io/tls", Namespace: namespace, Name: name}
+}
+
+func TestCorrelateKubernetesOnly(t *testing.T) {
+	now := date(1, time.February)
+	input := Input{
+		Now: now,
+		Kube: []kube.Certificate{{
+			Fingerprint: "ee",
+			DedupKey:    "secret/payments/db",
+			Serial:      "0a",
+			Names:       []string{"db.payments.svc"},
+			Issuer:      "CN=Kube CA",
+			NotBefore:   date(1, time.January),
+			NotAfter:    date(1, time.April),
+			Owners:      []owner.Owner{{Value: "team-pay", Source: owner.SourceLabel, Location: "secret/payments/db"}},
+			Observations: []kube.Observation{{
+				Source:     kube.SourceSecret,
+				Location:   "payments/db",
+				Detail:     "kubernetes.io/tls secret",
+				Kubernetes: kubeFacts("payments", "db"),
+			}},
+		}},
+	}
+	certificates, findings := Correlate(input)
+	again, againFindings := Correlate(input)
+	if diff := cmp.Diff(certificates, again); diff != "" {
+		t.Fatalf("non-deterministic certificates (-first +second):\n%s", diff)
+	}
+	if diff := cmp.Diff(findings, againFindings); diff != "" {
+		t.Fatalf("non-deterministic findings (-first +second):\n%s", diff)
+	}
+	if len(certificates) != 1 {
+		t.Fatalf("certificates = %+v", certificates)
+	}
+	certificate := certificates[0]
+	if certificate.LifetimeDays != 90 {
+		t.Fatalf("lifetime = %d", certificate.LifetimeDays)
+	}
+	if certificate.Verdict100D != VerdictNotApplicable {
+		t.Fatalf("verdict = %q, want %q", certificate.Verdict100D, VerdictNotApplicable)
+	}
+	if certificate.Public != nil {
+		t.Fatalf("public = %v, want unknown", *certificate.Public)
+	}
+	if len(certificate.Owners) != 1 || certificate.Owners[0].Source != owner.SourceLabel {
+		t.Fatalf("owners = %+v", certificate.Owners)
+	}
+	if certificate.Observations[0].Kubernetes == nil {
+		t.Fatalf("kubernetes facts missing: %+v", certificate.Observations)
+	}
+	if len(findings) != 1 || findings[0].Kind != KindKubeOnly {
+		t.Fatalf("findings = %+v", findings)
+	}
+}
+
+func TestCorrelateKubernetesPublicVerdict(t *testing.T) {
+	public := true
+	certificates, findings := Correlate(Input{
+		Now: date(1, time.February),
+		Kube: []kube.Certificate{{
+			Fingerprint: "ff",
+			DedupKey:    "secret/payments/public",
+			Names:       []string{"public.example.com"},
+			NotBefore:   date(1, time.January),
+			NotAfter:    date(1, time.April),
+			Public:      &public,
+			Observations: []kube.Observation{{
+				Source:     kube.SourceSecret,
+				Location:   "payments/public",
+				Detail:     "kubernetes.io/tls secret",
+				Kubernetes: kubeFacts("payments", "public"),
+			}},
+		}},
+	})
+	if len(certificates) != 1 || certificates[0].Verdict100D != "ok" {
+		t.Fatalf("certificates = %+v", certificates)
+	}
+	if certificates[0].Public == nil || !*certificates[0].Public {
+		t.Fatalf("public = %+v", certificates[0].Public)
+	}
+	if len(findings) != 1 || findings[0].Kind != KindKubeOnly {
+		t.Fatalf("findings = %+v", findings)
+	}
+}
+
+func TestCorrelateKubernetesCorrelatesWithCTAndLive(t *testing.T) {
+	live := tlsprobe.Result{
+		Host: "www.example.com", Port: 443, Fingerprint: "aa", Names: []string{"www.example.com"},
+		Issuer: "CN=CA", NotBefore: date(1, time.January), NotAfter: date(1, time.April), Trusted: true,
+	}
+	certificates, findings := Correlate(Input{
+		Domains: []string{"example.com"},
+		Now:     date(1, time.February),
+		CT: []ct.Certificate{{
+			Fingerprint: "aa", SubjectNames: []string{"example.com", "www.example.com"}, Issuer: "CN=CA",
+			NotBefore: date(1, time.January), NotAfter: date(1, time.April), Source: "certspotter", DedupKey: "1",
+		}},
+		Live: []tlsprobe.Result{live},
+		Kube: []kube.Certificate{{
+			Fingerprint: "aa",
+			DedupKey:    "secret/web/tls",
+			Names:       []string{"example.com"},
+			NotBefore:   date(1, time.January),
+			NotAfter:    date(1, time.April),
+			Owners:      []owner.Owner{{Value: "team-web", Source: owner.SourceMappingFile, Location: "domain/example.com"}},
+			Observations: []kube.Observation{{
+				Source:     kube.SourceSecret,
+				Location:   "web/tls",
+				Detail:     "kubernetes.io/tls secret",
+				Kubernetes: kubeFacts("web", "tls"),
+			}},
+		}},
+	})
+	if len(certificates) != 1 {
+		t.Fatalf("certificates = %+v", certificates)
+	}
+	certificate := certificates[0]
+	if len(certificate.Observations) != 3 {
+		t.Fatalf("observations = %+v", certificate.Observations)
+	}
+	if len(certificate.Owners) != 1 || certificate.Owners[0].Value != "team-web" {
+		t.Fatalf("owners = %+v", certificate.Owners)
+	}
+	if certificate.Verdict100D != "ok" || certificate.Public == nil || !*certificate.Public {
+		t.Fatalf("verdict=%q public=%v", certificate.Verdict100D, certificate.Public)
+	}
+	if len(findings) != 1 || findings[0].Kind != KindMatched {
+		t.Fatalf("findings = %+v", findings)
 	}
 }

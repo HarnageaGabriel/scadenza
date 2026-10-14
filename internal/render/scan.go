@@ -12,6 +12,7 @@ import (
 
 	"github.com/HarnageaGabriel/scadenza/internal/diag"
 	"github.com/HarnageaGabriel/scadenza/internal/inventory"
+	"github.com/HarnageaGabriel/scadenza/internal/owner"
 )
 
 // ScanDocument is the stable scadenza.scan/v1 JSON envelope.
@@ -45,7 +46,7 @@ func Scan(writer io.Writer, format string, document ScanDocument) error {
 
 func writeScanCSV(writer io.Writer, certificates []inventory.Certificate) error {
 	output := csv.NewWriter(writer)
-	if err := output.Write([]string{"fingerprint_sha256", "serial", "names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "public", "source", "location", "detail"}); err != nil {
+	if err := output.Write([]string{"fingerprint_sha256", "serial", "names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "public", "source", "location", "detail", "owners"}); err != nil {
 		return err
 	}
 	for _, certificate := range certificates {
@@ -67,6 +68,7 @@ func writeScanCSV(writer io.Writer, certificates []inventory.Certificate) error 
 				csvSafe(observation.Source),
 				csvSafe(observation.Location),
 				csvSafe(observation.Detail),
+				csvSafe(displayOwners(certificate.Owners)),
 			}
 			if err := output.Write(row); err != nil {
 				return err
@@ -79,11 +81,11 @@ func writeScanCSV(writer io.Writer, certificates []inventory.Certificate) error 
 
 func writeScanTable(writer io.Writer, document ScanDocument) error {
 	certificates := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(certificates, "FINGERPRINT SHA256\tSERIAL\tDAYS\t100D\tPUBLIC\tOBSERVATIONS\tISSUER\tNAMES"); err != nil {
+	if _, err := fmt.Fprintln(certificates, "FINGERPRINT SHA256\tSERIAL\tDAYS\t100D\tPUBLIC\tOBSERVATIONS\tISSUER\tNAMES\tOWNERS"); err != nil {
 		return err
 	}
 	for _, certificate := range document.Certificates {
-		if _, err := fmt.Fprintf(certificates, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(certificates, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			displayFingerprint(certificate.Fingerprint),
 			certificate.Serial,
 			certificate.LifetimeDays,
@@ -92,6 +94,7 @@ func writeScanTable(writer io.Writer, document ScanDocument) error {
 			displayObservations(certificate.Observations),
 			certificate.Issuer,
 			displayNames(certificate.Names),
+			displayOwners(certificate.Owners),
 		); err != nil {
 			return err
 		}
@@ -119,6 +122,17 @@ func displayFingerprint(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func displayOwners(owners []owner.Owner) string {
+	if len(owners) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(owners))
+	for _, entry := range owners {
+		parts = append(parts, entry.Value+" ("+string(entry.Source)+")")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func publicText(value *bool) string {

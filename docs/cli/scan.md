@@ -37,6 +37,48 @@ probed.
   `--max-hosts` (default 200).
 - `--source certspotter,crtsh` selects and orders CT sources.
 - `--format table|json|csv` selects table (default), versioned JSON, or CSV.
+- `--kube` also reads TLS Secrets and cert-manager Certificates from a
+  Kubernetes cluster, read-only.
+- `--kube-context name`, `--kubeconfig path`, `--namespace ns` (repeatable,
+  default all namespaces), `--ownership-file path`, `--kube-qps 5` configure the
+  Kubernetes source. They require `--kube`.
+
+## Kubernetes source
+
+`scan --kube` adds a read-only Kubernetes source. It lists Secrets with the
+server-side field selector `type=kubernetes.io/tls`, reads only `tls.crt`, and
+parses the PEM chain. The leaf's SHA-256 DER fingerprint merges it into the same
+inventory as Certificate Transparency and live handshakes. `tls.key` is dropped
+from the object as soon as the list response is decoded and is never decoded,
+copied, logged, or retained.
+
+It also reads cert-manager `Certificate` resources at `cert-manager.io/v1` and
+reports the issuer kind and name, the resolved issuer type (`acme`, `ca`,
+`selfSigned`, `vault`, `venafi`, `external`, or `unknown`, taken only from which
+`spec` key exists), the ACME directory server URL, `spec.duration`,
+`spec.renewBefore`, `status.notAfter`, `status.renewalTime`, and the `Ready`
+condition. These raw facts are stored now so that M5 can classify renewal
+without re-reading the cluster. Private keys and `privateKeySecretRef` targets
+are never read.
+
+Kubernetes certificates that do not verify against the system roots keep the
+inventory entry but get no 100-day verdict: `verdict_100d` is `not_applicable`
+and `public` stays `null` (unknown). A certificate seen only in Kubernetes is
+reported with the finding kind `kube_only`.
+
+Owners come only from labels, annotations, namespaces, and an optional mapping
+file; see [ownership](../ownership.md). Each owner records its source in the
+`owners` array (`owner`, `owner_source`, `location`).
+
+Credentials and kubeconfig content are never printed. Reads use only `list` and
+`get`; the minimal RBAC is in
+[`deploy/rbac/scadenza-readonly.yaml`](../../deploy/rbac/scadenza-readonly.yaml).
+
+Run the source against a cluster (the CI-only kind test does this):
+
+```sh
+scadenza scan --kube --kube-context kind-scadenza-e2e --format json
+```
 
 ## Correlation rules
 
@@ -66,15 +108,17 @@ Findings are deterministic and sorted. The kinds are:
   failed probe name, or a certificate that already expired.
 - `unknown` - no fingerprint or serial number, so it cannot be correlated.
 - `exceeds-100d` - the certificate validity exceeds 100 days.
+- `kube_only` - read from Kubernetes and not observed in CT or a live handshake.
 
 Never infer: anything undecidable is `not_checked` or `unknown`.
 
 ## Exit codes
 
-`0` when no `ct_only`, `live_only`, or `exceeds-100d` finding exists (matched and
-`not_checked` findings do not affect the exit status). `3` when one of those
-findings exists. `4` when every selected source was unavailable. `2` on usage
-errors. See [exit codes](../exit-codes.md).
+`0` when no `ct_only`, `live_only`, or `exceeds-100d` finding exists (matched,
+`not_checked`, and `kube_only` findings do not affect the exit status). `3` when
+one of those findings exists. `4` only when at least one source was requested and
+every requested source was unavailable; partial failures are warnings. `2` on
+usage errors. See [exit codes](../exit-codes.md).
 
 ## Output
 
@@ -84,3 +128,8 @@ The table prints the certificates followed by a findings summary. CSV emits one
 row per (certificate, observation) and reuses the `scadenza ct` formula-injection
 escaping (a leading single quote for cells starting with `=`, `+`, `-`, `@`, tab,
 or carriage return).
+
+The certificate object additively gains `owners` (when an ownership rule
+matched) and each observation gains a `kubernetes` object for Kubernetes
+sources. `sources_used`, `verdict_100d`, `findings.kind`, and the observation
+`source` enum gained the Kubernetes values without bumping `scadenza.scan/v1`.

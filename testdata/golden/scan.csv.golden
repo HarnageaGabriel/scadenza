@@ -1,6 +1,6 @@
-fingerprint_sha256,serial,names,issuer,not_before,not_after,lifetime_days,verdict_100d,public,source,location,detail
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,0a,example.com www.example.com,CN=Example Live Root,2026-01-01T00:00:00Z,2026-04-01T00:00:00Z,90,ok,yes,ct-certspotter,certspotter,Certificate Transparency issuance
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,0a,example.com www.example.com,CN=Example Live Root,2026-01-01T00:00:00Z,2026-04-01T00:00:00Z,90,ok,yes,tls,www.example.com:443,leaf presented; trusted=true
-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,,api.example.com,CN=Example Root,2026-01-01T00:00:00Z,2026-07-20T00:00:00Z,200,exceeds,unknown,ct-certspotter,certspotter,Certificate Transparency issuance
-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc,,*.example.com,CN=Example Root,2026-01-01T00:00:00Z,2026-04-01T00:00:00Z,90,ok,unknown,ct-certspotter,certspotter,Certificate Transparency issuance
-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd,0d,example.com,CN=Self Signed,2025-12-01T00:00:00Z,2026-03-01T00:00:00Z,90,ok,no,tls,example.com:443,leaf presented; trusted=false
+fingerprint_sha256,serial,names,issuer,not_before,not_after,lifetime_days,verdict_100d,public,source,location,detail,owners
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,0a,example.com www.example.com,CN=Example Live Root,2026-01-01T00:00:00Z,2026-04-01T00:00:00Z,90,ok,yes,ct-certspotter,certspotter,Certificate Transparency issuance,'-
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,0a,example.com www.example.com,CN=Example Live Root,2026-01-01T00:00:00Z,2026-04-01T00:00:00Z,90,ok,yes,tls,www.example.com:443,leaf presented; trusted=true,'-
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,,api.example.com,CN=Example Root,2026-01-01T00:00:00Z,2026-07-20T00:00:00Z,200,exceeds,unknown,ct-certspotter,certspotter,Certificate Transparency issuance,'-
+cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc,,*.example.com,CN=Example Root,2026-01-01T00:00:00Z,2026-04-01T00:00:00Z,90,ok,unknown,ct-certspotter,certspotter,Certificate Transparency issuance,'-
+dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd,0d,example.com,CN=Self Signed,2025-12-01T00:00:00Z,2026-03-01T00:00:00Z,90,ok,no,tls,example.com:443,leaf presented; trusted=false,'-

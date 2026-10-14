@@ -1,0 +1,117 @@
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "43 3 * * 2"
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # VERIFY: pinned from https://cert-manager.io/docs/installation/kubectl/ , which
+  # documents `kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml`
+  # as the install path. Bump deliberately and re-check the URL plus the release
+  # notes before changing it.
+  CERT_MANAGER_VERSION: v1.21.2
+  # VERIFY: pinned from https://kind.sigs.k8s.io/docs/user/quick-start/ . Re-check
+  # the version and the download URL before changing it.
+  KIND_VERSION: v0.30.0
+  KIND_CLUSTER: scadenza-e2e
+  E2E_NAMESPACE: scadenza-e2e
+
+jobs:
+  kind:
+    name: kind + cert-manager
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install kind
+        run: |
+          curl -fsSLo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          sudo install -m 0755 ./kind /usr/local/bin/kind
+          kind version
+      - name: Create the cluster
+        run: kind create cluster --name "${KIND_CLUSTER}" --wait 180s
+      - name: Install cert-manager
+        run: |
+          kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
+          kubectl -n cert-manager wait --for=condition=Established --timeout=180s crd/certificates.cert-manager.io
+          kubectl -n cert-manager rollout status deployment --all --timeout=300s
+      - name: Create the self-signed issuer and certificates
+        run: |
+          kubectl apply -f - <<'YAML'
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: scadenza-e2e
+            labels:
+              scadenza.io/owner: team-e2e
+          ---
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: scadenza-selfsigned
+          spec:
+            selfSigned: {}
+          ---
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: short
+            namespace: scadenza-e2e
+            labels:
+              scadenza.io/owner: team-e2e
+          spec:
+            secretName: short-tls
+            duration: 720h
+            renewBefore: 168h
+            commonName: short.e2e.example.com
+            dnsNames:
+              - short.e2e.example.com
+            issuerRef:
+              name: scadenza-selfsigned
+              kind: ClusterIssuer
+          ---
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: long
+            namespace: scadenza-e2e
+            labels:
+              scadenza.io/owner: team-e2e
+          spec:
+            secretName: long-tls
+            duration: 2160h
+            renewBefore: 720h
+            commonName: long.e2e.example.com
+            dnsNames:
+              - long.e2e.example.com
+            issuerRef:
+              name: scadenza-selfsigned
+              kind: ClusterIssuer
+          YAML
+          kubectl -n "${E2E_NAMESPACE}" wait --for=condition=Ready --timeout=180s certificate/short certificate/long
+      - name: Run the Kubernetes source e2e
+        env:
+          SCADENZA_E2E_KUBE_CONTEXT: kind-scadenza-e2e
+          SCADENZA_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
+        run: go test -tags e2e -count=1 -v ./test/e2e/...
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl get certificates,secrets -A
+          kubectl -n cert-manager get pods

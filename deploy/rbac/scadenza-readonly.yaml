@@ -1,0 +1,45 @@
+# Minimal read-only RBAC for `scadenza scan --kube`.
+#
+# scadenza only ever issues list and get. It never watches and never writes, so
+# this ClusterRole grants exactly those verbs and nothing else.
+#
+# Secrets are read cluster-wide because scans may cover every namespace. The
+# API request carries the server-side field selector type=kubernetes.io/tls, so
+# only TLS Secrets are returned, but the RBAC grant itself is still broad.
+# Operators who prefer a narrower scope should replace the ClusterRoleBinding
+# with per-namespace Role and RoleBinding objects that keep the `secrets`,
+# `certificates`, and `issuers` rules and drop `namespaces` and
+# `clusterissuers` (both are cluster-scoped).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scadenza-readonly
+  namespace: scadenza
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scadenza-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["list", "get"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["list", "get"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates", "issuers", "clusterissuers"]
+    verbs: ["list", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scadenza-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scadenza-readonly
+subjects:
+  - kind: ServiceAccount
+    name: scadenza-readonly
+    namespace: scadenza

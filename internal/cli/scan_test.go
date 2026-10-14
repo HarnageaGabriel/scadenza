@@ -30,6 +30,8 @@ import (
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
 	"github.com/HarnageaGabriel/scadenza/internal/httpx"
 	"github.com/HarnageaGabriel/scadenza/internal/inventory"
+	"github.com/HarnageaGabriel/scadenza/internal/kube"
+	"github.com/HarnageaGabriel/scadenza/internal/owner"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
 )
 
@@ -357,4 +359,224 @@ func FuzzParseHostsFile(f *testing.F) {
 			}
 		}
 	})
+}
+
+// --- M3: Kubernetes source -------------------------------------------------
+
+// fakeKubeSource is a scripted kube.Source. It never touches a cluster, so the
+// cobra wiring, correlation, rendering, and exit codes are exercised end to end
+// without a real API server.
+type fakeKubeSource struct {
+	result kube.Result
+	err    error
+}
+
+func (source fakeKubeSource) Scan(context.Context) (kube.Result, error) {
+	return source.result, source.err
+}
+
+// scanKubeDependencies wires a fake Kubernetes source into the scan command.
+// loadErr models a client-load failure such as an unreachable API server.
+func scanKubeDependencies(certURL string, prober hostProber, source kube.Source, loadErr error) ctDependencies {
+	dependencies := scanDependencies(certURL, prober)
+	dependencies.loadKube = func(kube.LoadOptions, kube.Options) (kube.Source, error) {
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		return source, nil
+	}
+	return dependencies
+}
+
+// kubeFixture returns one TLS Secret certificate and one cert-manager
+// Certificate, plus a non-fatal CRD-missing problem.
+func kubeFixture() kube.Result {
+	verified := true
+	return kube.Result{
+		Certificates: []kube.Certificate{
+			{
+				Fingerprint: strings.Repeat("e", 64),
+				DedupKey:    "secret/payments/api-tls",
+				Serial:      "1e",
+				Names:       []string{"api.payments.example.com"},
+				Issuer:      "CN=Payments Internal CA",
+				NotBefore:   time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC),
+				NotAfter:    time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC),
+				Owners:      []owner.Owner{{Value: "team-pay", Source: owner.SourceNamespaceLabel, Location: "namespace/payments"}},
+				Observations: []kube.Observation{{
+					Source:     kube.SourceSecret,
+					Location:   "payments/api-tls",
+					Detail:     "kubernetes.io/tls secret",
+					Kubernetes: &kube.Kubernetes{Resource: "secret", Namespace: "payments", Name: "api-tls"},
+				}},
+			},
+			{
+				Fingerprint: strings.Repeat("f", 64),
+				DedupKey:    "certificate/shop/web",
+				Serial:      "1f",
+				Names:       []string{"shop.example.com"},
+				Issuer:      "CN=Example Public CA",
+				NotBefore:   time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC),
+				NotAfter:    time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC),
+				Public:      &verified,
+				Owners:      []owner.Owner{{Value: "team-web", Source: owner.SourceMappingFile, Location: "domains/example.com"}},
+				Observations: []kube.Observation{{
+					Source:   kube.SourceCertManager,
+					Location: "shop/web",
+					Detail:   "Certificate -> secret web-tls",
+					Kubernetes: &kube.Kubernetes{
+						Resource:    "certificate",
+						Namespace:   "shop",
+						Name:        "web",
+						SecretName:  "web-tls",
+						IssuerKind:  kube.ClusterIssuerKind,
+						IssuerName:  "letsencrypt",
+						IssuerType:  kube.IssuerTypeACME,
+						ACMEServer:  "https://acme-v02.api.letsencrypt.org/directory",
+						Duration:    "2160h0m0s",
+						RenewBefore: "720h0m0s",
+						NotAfter:    "2026-04-10T00:00:00Z",
+						RenewalTime: "2026-03-11T00:00:00Z",
+						Ready:       "True",
+						ReadyReason: "Ready",
+					},
+				}},
+			},
+		},
+		Problems: []kube.Problem{{Code: kube.CodeCRDMissing, Resource: "cert-manager.io/v1", Detail: "certificates.cert-manager.io not found"}},
+	}
+}
+
+func TestScanKubeGoldenJSON(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{"scan", "--kube", "--format", "json"}, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil))
+	if code != ExitOK {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), kube.CodeCRDMissing) {
+		t.Fatalf("missing CRD diagnostic in stderr: %s", stderr.String())
+	}
+	path := filepath.Join("..", "..", "testdata", "golden", "scan-kube.json.golden")
+	if *updateGolden {
+		if err := os.WriteFile(path, []byte(normalizeLines(stdout.String())), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalizeLines(stdout.String()) != normalizeLines(string(want)) {
+		t.Fatalf("output mismatch\nwant:\n%s\ngot:\n%s", want, stdout.String())
+	}
+
+	// Determinism: a second identical run must produce byte-identical output.
+	var repeat, repeatErr bytes.Buffer
+	if code := execute([]string{"scan", "--kube", "--format", "json"}, &repeat, &repeatErr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
+		t.Fatalf("repeat exit = %d", code)
+	}
+	if normalizeLines(repeat.String()) != normalizeLines(stdout.String()) {
+		t.Fatal("kube output is not deterministic")
+	}
+}
+
+func TestScanKubePartialFailureIsNotExitFour(t *testing.T) {
+	server := certSpotterServer(t, scanCTFixture())
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--kube", "--format", "json"},
+		&stdout, &stderr, scanKubeDependencies(server.URL, fakeProber{}, fakeKubeSource{}, errors.New("dial tcp: connection refused")))
+	if code == ExitSourceUnavailable {
+		t.Fatalf("partial Kubernetes failure must not exit 4; stderr=%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), kube.CodeUnreachable) {
+		t.Fatalf("expected %s in %s", kube.CodeUnreachable, stderr.String())
+	}
+}
+
+func TestScanKubeAllSourcesFail(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{"scan", "--kube", "--format", "json"},
+		&stdout, &stderr, scanKubeDependencies("x", fakeProber{}, nil, errors.New("no configuration has been provided")))
+	if code != ExitSourceUnavailable {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), kube.CodeUnreachable) {
+		t.Fatalf("expected %s in %s", kube.CodeUnreachable, stderr.String())
+	}
+}
+
+func TestScanKubeOwnershipFile(t *testing.T) {
+	valid := filepath.Join(t.TempDir(), "owners.yaml")
+	if err := os.WriteFile(valid, []byte("labelKeys:\n  - scadenza.io/owner\ndomains:\n  example.com: team-web\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{"scan", "--kube", "--ownership-file", valid, "--format", "json"},
+		&stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil))
+	if code != ExitOK {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "team-web") || !strings.Contains(stdout.String(), `"owner_source":"mapping-file"`) {
+		t.Fatalf("ownership output missing: %s", stdout.String())
+	}
+
+	invalid := filepath.Join(t.TempDir(), "bad.yaml")
+	if err := os.WriteFile(invalid, []byte("labelKeys: [scadenza.io/owner]\nbogus: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var badOut, badErr bytes.Buffer
+	code = execute([]string{"scan", "--kube", "--ownership-file", invalid, "--format", "json"},
+		&badOut, &badErr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{}, nil))
+	if code != ExitUsageError || !strings.Contains(badErr.String(), kube.CodeOwnershipFileInvalid) {
+		t.Fatalf("invalid ownership file: code=%d stderr=%s", code, badErr.String())
+	}
+
+	missing := filepath.Join(t.TempDir(), "absent.yaml")
+	code = execute([]string{"scan", "--kube", "--ownership-file", missing, "--format", "json"},
+		&badOut, &badErr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{}, nil))
+	if code != ExitUsageError {
+		t.Fatalf("missing ownership file: code=%d", code)
+	}
+}
+
+func TestScanKubeFlagsRequireKube(t *testing.T) {
+	for _, args := range [][]string{
+		{"scan", "--domain", "example.com", "--kube-context", "prod"},
+		{"scan", "--domain", "example.com", "--kubeconfig", "/tmp/kubeconfig"},
+		{"scan", "--domain", "example.com", "--namespace", "payments"},
+		{"scan", "--domain", "example.com", "--ownership-file", "owners.yaml"},
+		{"scan", "--kube", "--kube-qps", "0"},
+		{"scan", "--domain", "example.com", "--kube-qps", "1"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := execute(args, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{}, nil)); code != ExitUsageError || !strings.Contains(stderr.String(), "SCD-0001") {
+			t.Fatalf("args=%v code=%d stderr=%s", args, code, stderr.String())
+		}
+	}
+}
+
+func TestScanKubePassesNamespacesAndRate(t *testing.T) {
+	var load kube.LoadOptions
+	var options kube.Options
+	dependencies := scanDependencies("x", fakeProber{})
+	dependencies.loadKube = func(load0 kube.LoadOptions, scan0 kube.Options) (kube.Source, error) {
+		load, options = load0, scan0
+		return fakeKubeSource{}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{"scan", "--kube", "--namespace", "payments", "--namespace", "shop", "--kube-context", "prod", "--kube-qps", "9", "--format", "json"},
+		&stdout, &stderr, dependencies)
+	if code != ExitOK {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+	}
+	if load.Context != "prod" || load.QPS != 9 {
+		t.Fatalf("load options = %+v", load)
+	}
+	if len(options.Namespaces) != 2 || options.Namespaces[0] != "payments" || options.Namespaces[1] != "shop" {
+		t.Fatalf("namespaces = %v", options.Namespaces)
+	}
+	if keys := options.Owners.LabelKeys(); len(keys) != 1 || keys[0] != "scadenza.io/owner" {
+		t.Fatalf("default label keys = %v", keys)
+	}
 }

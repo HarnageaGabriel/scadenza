@@ -78,3 +78,39 @@ codes:
     summary: Live certificate absent from Certificate Transparency
     explanation: A probed host presented a certificate that the Certificate Transparency results for the scanned domains did not contain.
     remediation: Confirm the certificate is publicly logged, or treat it as private or untrusted.
+  - code: SCD-0014
+    slug: kube-unreachable
+    severity: error
+    summary: Kubernetes API server is unreachable
+    explanation: scadenza could not reach the Kubernetes API server, so no TLS Secret or cert-manager Certificate could be read from the cluster.
+    remediation: Check the kubeconfig, --kube-context, and cluster connectivity, then retry.
+  - code: SCD-0015
+    slug: kube-forbidden
+    severity: warning
+    summary: Kubernetes read access was forbidden
+    explanation: Kubernetes RBAC refused a read. The detail names the resource kind whose list was denied; other kinds may still have been read, so this is a partial failure.
+    remediation: Grant the documented read-only ClusterRole with list/get on secrets, certificates, issuers, clusterissuers, and namespaces.
+  - code: SCD-0016
+    slug: secret-without-certificate
+    severity: warning
+    summary: TLS secret holds no certificate
+    explanation: A secret of type kubernetes.io/tls was read but contained no tls.crt data, so no certificate could be parsed from it. The private key is never read.
+    remediation: Confirm the secret is a complete kubernetes.io/tls secret, or remove it when it is stale.
+  - code: SCD-0017
+    slug: certificate-parse-failed
+    severity: warning
+    summary: Kubernetes certificate could not be parsed
+    explanation: The tls.crt payload could not be parsed as a PEM certificate chain. The detail names the secret; no certificate or key data is logged.
+    remediation: Replace the secret data with a valid PEM certificate chain.
+  - code: SCD-0018
+    slug: cert-manager-crd-missing
+    severity: info
+    summary: cert-manager custom resources are not installed
+    explanation: The cert-manager.io/v1 custom resource definitions could not be listed, so cert-manager Certificates were skipped. TLS Secrets were still read.
+    remediation: Install cert-manager to include Certificate, Issuer, and ClusterIssuer observations, or accept TLS Secrets only.
+  - code: SCD-0019
+    slug: ownership-file-invalid
+    severity: error
+    summary: Ownership file could not be used
+    explanation: The --ownership-file could not be read or did not match the documented schema. Owner resolution is not attempted from an invalid file, so no owner is inferred.
+    remediation: Fix the YAML so it contains only labelKeys, domains, and namespaces, and give every value a non-empty string.

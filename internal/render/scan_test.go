@@ -13,6 +13,7 @@ import (
 
 	"github.com/HarnageaGabriel/scadenza/internal/diag"
 	"github.com/HarnageaGabriel/scadenza/internal/inventory"
+	"github.com/HarnageaGabriel/scadenza/internal/owner"
 )
 
 func sampleScanDocument() ScanDocument {
@@ -30,6 +31,15 @@ func sampleScanDocument() ScanDocument {
 				{Source: inventory.SourceCertSpotter, Location: "certspotter", Detail: "Certificate Transparency issuance"},
 				{Source: inventory.SourceTLS, Location: "www.example.com:443", Detail: "leaf presented; trusted=true"},
 			},
+			Owners: []owner.Owner{{Value: "team-web", Source: owner.SourceLabel, Location: "label/scadenza.io/owner"}},
+		}, {
+			Fingerprint: strings.Repeat("b", 64), Serial: "1b", Names: []string{"api.payments.example.com"},
+			Issuer: "CN=Payments Internal CA", NotBefore: time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC),
+			LifetimeDays: 90, Verdict100D: inventory.VerdictNotApplicable, Public: nil,
+			Observations: []inventory.Observation{
+				{Source: inventory.SourceKubeSecret, Location: "payments/api-tls", Detail: "kubernetes.io/tls secret"},
+				{Source: inventory.SourceCertManager, Location: "payments/api", Detail: "Certificate -> secret api-tls"},
+			},
 		}},
 		Findings: []inventory.Finding{
 			{Kind: inventory.KindMatched, Fingerprint: strings.Repeat("a", 64), Names: []string{"www.example.com"}, Detail: "matched"},
@@ -38,6 +48,7 @@ func sampleScanDocument() ScanDocument {
 			{Kind: inventory.KindNotChecked, Fingerprint: strings.Repeat("d", 64), Names: []string{"*.example.com"}, Detail: "not checked"},
 			{Kind: inventory.KindUnknown, Fingerprint: "", Names: []string{"x.example.com"}, Detail: "unknown"},
 			{Kind: inventory.KindExceeds100D, Fingerprint: strings.Repeat("e", 64), Names: []string{"long.example.com"}, Detail: "exceeds"},
+			{Kind: inventory.KindKubeOnly, Fingerprint: strings.Repeat("b", 64), Names: []string{"api.payments.example.com"}, Detail: "read from Kubernetes"},
 		},
 		Unresolved:  []inventory.Unresolved{{Name: "*.example.com", Reason: "wildcard", Detail: "wildcard"}},
 		ProbeErrors: []inventory.ProbeError{{Host: "api.example.com", Port: 443, Class: "refused", Detail: "probe api.example.com:443: refused"}},
@@ -80,6 +91,11 @@ type scanSchema struct {
 					Properties map[string]struct {
 						Enum []string `json:"enum"`
 					} `json:"properties"`
+					Items struct {
+						Properties map[string]struct {
+							Enum []string `json:"enum"`
+						} `json:"properties"`
+					} `json:"items"`
 				} `json:"properties"`
 			} `json:"items"`
 		} `json:"certificates"`
@@ -160,25 +176,27 @@ func TestScanJSONMatchesPublishedSchema(t *testing.T) {
 		t.Fatal("certificate schema must set additionalProperties false")
 	}
 	for _, emitted := range document.Certificates {
-		if diff := symdiff(keys(emitted), certificate.Required); diff != "" {
-			t.Errorf("certificate keys != schema required: %s", diff)
+		// Every required field must be present and no undeclared field may be
+		// emitted, because the schema sets additionalProperties false. Optional
+		// fields such as owners appear only when an ownership rule matched.
+		for _, field := range certificate.Required {
+			if _, ok := emitted[field]; !ok {
+				t.Errorf("certificate missing required field %q", field)
+			}
 		}
-		for name, rule := range certificate.Properties {
-			if _, ok := emitted[name]; !ok {
-				t.Errorf("schema certificate property %q not emitted", name)
+		for name := range emitted {
+			if _, ok := certificate.Properties[name]; !ok {
+				t.Errorf("certificate emitted undeclared property %q", name)
 			}
-			if len(rule.Properties) == 0 {
-				continue
-			}
-			var observations []map[string]string
-			if err := json.Unmarshal(emitted[name], &observations); err != nil {
-				t.Fatalf("decode %s: %v", name, err)
-			}
-			sourceEnum := rule.Properties["source"].Enum
-			for _, observation := range observations {
-				if len(sourceEnum) > 0 && !slices.Contains(sourceEnum, observation["source"]) {
-					t.Errorf("observation source %q not in enum %v", observation["source"], sourceEnum)
-				}
+		}
+		var observations []map[string]string
+		if err := json.Unmarshal(emitted["observations"], &observations); err != nil {
+			t.Fatalf("decode observations: %v", err)
+		}
+		sourceEnum := certificate.Properties["observations"].Items.Properties["source"].Enum
+		for _, observation := range observations {
+			if !slices.Contains(sourceEnum, observation["source"]) {
+				t.Errorf("observation source %q not in enum %v", observation["source"], sourceEnum)
 			}
 		}
 	}
@@ -271,15 +289,4 @@ func keys(values map[string]json.RawMessage) []string {
 	}
 	slices.Sort(result)
 	return result
-}
-
-func symdiff(left, right []string) string {
-	sortedLeft := slices.Clone(left)
-	sortedRight := slices.Clone(right)
-	slices.Sort(sortedLeft)
-	slices.Sort(sortedRight)
-	if slices.Equal(sortedLeft, sortedRight) {
-		return ""
-	}
-	return "left=" + strings.Join(sortedLeft, ",") + " right=" + strings.Join(sortedRight, ",")
 }

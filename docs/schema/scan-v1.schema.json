@@ -9,7 +9,7 @@
     "schema_version": {"const": "scadenza.scan/v1"},
     "generated_at": {"type": "string", "format": "date-time"},
     "domains": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "sources_used": {"type": "array", "items": {"enum": ["certspotter", "crtsh", "tls"]}},
+    "sources_used": {"type": "array", "items": {"enum": ["certspotter", "crtsh", "tls", "kube"]}},
     "certificates": {
       "type": "array",
       "items": {
@@ -24,8 +24,21 @@
           "not_before": {"type": "string", "format": "date-time"},
           "not_after": {"type": "string", "format": "date-time"},
           "lifetime_days": {"type": "integer", "minimum": 0},
-          "verdict_100d": {"enum": ["ok", "exceeds", "unknown"]},
+          "verdict_100d": {"enum": ["ok", "exceeds", "unknown", "not_applicable"]},
           "public": {"type": ["boolean", "null"]},
+          "owners": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["owner", "owner_source", "location"],
+              "properties": {
+                "owner": {"type": "string", "minLength": 1},
+                "owner_source": {"enum": ["label", "annotation", "namespace-label", "mapping-file"]},
+                "location": {"type": "string", "minLength": 1}
+              }
+            }
+          },
           "observations": {
             "type": "array",
             "items": {
@@ -33,9 +46,30 @@
               "additionalProperties": false,
               "required": ["source", "location", "detail"],
               "properties": {
-                "source": {"enum": ["ct-certspotter", "ct-crtsh", "tls"]},
+                "source": {"enum": ["ct-certspotter", "ct-crtsh", "tls", "kube-secret", "cert-manager"]},
                 "location": {"type": "string"},
-                "detail": {"type": "string"}
+                "detail": {"type": "string"},
+                "kubernetes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["resource", "namespace", "name"],
+                  "properties": {
+                    "resource": {"type": "string", "minLength": 1},
+                    "namespace": {"type": "string"},
+                    "name": {"type": "string", "minLength": 1},
+                    "secret_name": {"type": "string"},
+                    "issuer_kind": {"type": "string"},
+                    "issuer_name": {"type": "string"},
+                    "issuer_type": {"enum": ["acme", "ca", "selfSigned", "vault", "venafi", "external", "unknown"]},
+                    "acme_server": {"type": "string"},
+                    "duration": {"type": "string"},
+                    "renew_before": {"type": "string"},
+                    "status_not_after": {"type": "string"},
+                    "status_renewal_time": {"type": "string"},
+                    "ready": {"type": "string"},
+                    "ready_reason": {"type": "string"}
+                  }
+                }
               }
             }
           }
@@ -49,7 +83,7 @@
         "additionalProperties": false,
         "required": ["kind", "fingerprint", "names", "detail"],
         "properties": {
-          "kind": {"enum": ["matched", "ct_only", "live_only", "not_checked", "unknown", "exceeds-100d"]},
+          "kind": {"enum": ["matched", "ct_only", "live_only", "kube_only", "not_checked", "unknown", "exceeds-100d"]},
           "fingerprint": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
           "names": {"type": "array", "items": {"type": "string"}},
           "detail": {"type": "string", "minLength": 1}

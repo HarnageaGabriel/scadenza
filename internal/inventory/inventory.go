@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
+	"github.com/HarnageaGabriel/scadenza/internal/kube"
+	"github.com/HarnageaGabriel/scadenza/internal/owner"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
 )
 
@@ -28,6 +30,8 @@ const (
 	KindUnknown = "unknown"
 	// KindExceeds100D means the certificate lifetime exceeds 100 days.
 	KindExceeds100D = "exceeds-100d"
+	// KindKubeOnly means the certificate was read only from Kubernetes.
+	KindKubeOnly = "kube_only"
 )
 
 // Observation sources.
@@ -35,13 +39,24 @@ const (
 	SourceCertSpotter = "ct-certspotter"
 	SourceCrtSH       = "ct-crtsh"
 	SourceTLS         = "tls"
+	// SourceKubeSecret marks a certificate read from a kubernetes.io/tls Secret.
+	SourceKubeSecret = kube.SourceSecret
+	// SourceCertManager marks facts read from a cert-manager Certificate.
+	SourceCertManager = kube.SourceCertManager
 )
+
+// VerdictNotApplicable is reported when the 100-day rule does not apply, for
+// example to a Kubernetes certificate that cannot be classified as public.
+const VerdictNotApplicable = "not_applicable"
 
 // Observation records one place a certificate was seen.
 type Observation struct {
 	Source   string `json:"source"`
 	Location string `json:"location"`
 	Detail   string `json:"detail"`
+	// Kubernetes carries the raw Kubernetes and cert-manager facts, when the
+	// observation was read from a cluster.
+	Kubernetes *kube.Kubernetes `json:"kubernetes,omitempty"`
 }
 
 // Certificate is one correlated certificate.
@@ -56,6 +71,9 @@ type Certificate struct {
 	Verdict100D  string        `json:"verdict_100d"`
 	Public       *bool         `json:"public"`
 	Observations []Observation `json:"observations"`
+	// Owners lists every explicitly declared owner, each with the rule that
+	// produced it. It is empty when no ownership rule matched.
+	Owners []owner.Owner `json:"owners,omitempty"`
 }
 
 // Finding is one expected-versus-observed difference or status.
@@ -85,6 +103,7 @@ type ProbeError struct {
 type Input struct {
 	Domains  []string
 	CT       []ct.Certificate
+	Kube     []kube.Certificate
 	Live     []tlsprobe.Result
 	Errors   []ProbeError
 	Unprobed map[string]string
@@ -95,8 +114,11 @@ type accumulator struct {
 	certificate  Certificate
 	hasCT        bool
 	hasLive      bool
+	hasKube      bool
+	kubePublic   bool
 	anyUntrusted bool
 	names        map[string]bool
+	owners       map[string]owner.Owner
 	observations map[string]Observation
 }
 
@@ -193,6 +215,48 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		}
 	}
 
+	kubeRecords := append([]kube.Certificate(nil), in.Kube...)
+	sort.SliceStable(kubeRecords, func(i, j int) bool { return lessKube(kubeRecords[i], kubeRecords[j]) })
+	for _, record := range kubeRecords {
+		key := "kube:" + record.DedupKey
+		if record.Fingerprint != "" {
+			key = "fp:" + record.Fingerprint
+		}
+		entry := ensure(accumulated, &order, key, record.Fingerprint)
+		entry.hasKube = true
+		for _, name := range record.Names {
+			if normalized := normalizeName(name); normalized != "" {
+				entry.names[normalized] = true
+			}
+		}
+		if entry.certificate.Issuer == "" {
+			entry.certificate.Issuer = record.Issuer
+		}
+		if entry.certificate.Serial == "" {
+			entry.certificate.Serial = normalizeSerial(record.Serial)
+		}
+		if !record.NotBefore.IsZero() && (entry.certificate.NotBefore.IsZero() || entry.certificate.NotBefore.After(record.NotBefore)) {
+			entry.certificate.NotBefore = record.NotBefore
+		}
+		if !record.NotAfter.IsZero() && (entry.certificate.NotAfter.IsZero() || entry.certificate.NotAfter.After(record.NotAfter)) {
+			entry.certificate.NotAfter = record.NotAfter
+		}
+		if record.Public != nil && *record.Public {
+			entry.kubePublic = true
+		}
+		for _, declared := range record.Owners {
+			entry.owners[ownerKey(declared)] = declared
+		}
+		for _, observation := range record.Observations {
+			entry.observations[observation.Source+"|"+observation.Location] = Observation{
+				Source:     observation.Source,
+				Location:   observation.Location,
+				Detail:     observation.Detail,
+				Kubernetes: observation.Kubernetes,
+			}
+		}
+	}
+
 	states := in.stateLookup()
 	result := make([]Certificate, 0, len(order))
 	findings := make([]Finding, 0, len(order))
@@ -201,10 +265,21 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		certificate := entry.certificate
 		certificate.Names = sortedKeys(entry.names)
 		certificate.LifetimeDays, certificate.Verdict100D = lifetime(certificate.NotBefore, certificate.NotAfter)
-		if entry.hasLive {
+		switch {
+		case entry.hasLive:
 			public := !entry.anyUntrusted
 			certificate.Public = &public
+		case entry.kubePublic:
+			public := true
+			certificate.Public = &public
 		}
+		if entry.hasKube && certificate.Public == nil {
+			// A certificate that only Kubernetes holds, and that does not verify
+			// against the system roots, cannot be classified as public or
+			// private, so the 100-day rule does not apply to it.
+			certificate.Verdict100D = VerdictNotApplicable
+		}
+		certificate.Owners = sortedOwners(entry.owners)
 		certificate.Observations = sortedObservations(entry.observations)
 		kind, detail := classify(entry, states, in.Domains, certificate, now)
 		result = append(result, certificate)
@@ -264,6 +339,8 @@ func (lookup stateLookup) state(name string) string {
 
 func classify(entry *accumulator, lookup stateLookup, domains []string, certificate Certificate, now time.Time) (string, string) {
 	switch {
+	case !entry.hasCT && !entry.hasLive && entry.hasKube:
+		return KindKubeOnly, "read from Kubernetes and not observed in Certificate Transparency or a live handshake"
 	case entry.hasCT && entry.hasLive:
 		return KindMatched, "presented by a probed host and issued in Certificate Transparency"
 	case !entry.hasCT && entry.hasLive:
@@ -326,6 +403,7 @@ func ensure(accumulated map[string]*accumulator, order *[]string, key, fingerpri
 	entry := &accumulator{
 		certificate:  Certificate{Fingerprint: fingerprint},
 		names:        map[string]bool{},
+		owners:       map[string]owner.Owner{},
 		observations: map[string]Observation{},
 	}
 	accumulated[key] = entry
@@ -407,6 +485,34 @@ func sortedObservations(set map[string]Observation) []Observation {
 			return result[i].Location < result[j].Location
 		}
 		return result[i].Detail < result[j].Detail
+	})
+	return result
+}
+
+func lessKube(a, b kube.Certificate) bool {
+	if a.Fingerprint != b.Fingerprint {
+		return a.Fingerprint < b.Fingerprint
+	}
+	return a.DedupKey < b.DedupKey
+}
+
+func ownerKey(entry owner.Owner) string {
+	return entry.Value + "\x00" + string(entry.Source) + "\x00" + entry.Location
+}
+
+func sortedOwners(set map[string]owner.Owner) []owner.Owner {
+	result := make([]owner.Owner, 0, len(set))
+	for _, entry := range set {
+		result = append(result, entry)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Value != result[j].Value {
+			return result[i].Value < result[j].Value
+		}
+		if result[i].Source != result[j].Source {
+			return result[i].Source < result[j].Source
+		}
+		return result[i].Location < result[j].Location
 	})
 	return result
 }
