@@ -50,7 +50,7 @@ jobs:
         run: |
           kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
           kubectl -n cert-manager wait --for=condition=Established --timeout=180s crd/certificates.cert-manager.io
-          kubectl -n cert-manager rollout status deployment --all --timeout=300s
+          kubectl -n cert-manager wait --for=condition=Available deployment --all --timeout=300s
       - name: Create the self-signed issuer and certificates
         run: |
           kubectl apply -f - <<'YAML'
