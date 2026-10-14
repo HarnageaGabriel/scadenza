@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/scadenza-logo-dark.png">
-    <img src="docs/assets/scadenza-logo.png" alt="scadenza" width="440">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/scadenza-logo-dark.svg">
+    <img src="docs/assets/scadenza-logo.svg" alt="scadenza" width="420">
   </picture>
 </p>
 
@@ -222,3 +222,4 @@ migration forced by an external deadline, alongside
 ## License
 
 [Apache-2.0](LICENSE). Free forever: no paid edition and no locked features.
+The "scadenza" name and logo are covered by the [trademark policy](TRADEMARKS.md).
