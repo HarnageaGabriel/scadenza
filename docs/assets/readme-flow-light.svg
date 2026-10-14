@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 300" width="880" height="300" role="img" aria-label="Sources are correlated by fingerprint, renewal is classified, and a report is produced">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5b6b7b"/></marker></defs>
+<rect width="880" height="300" rx="12" fill="#ffffff" stroke="#d0d7de"/>
+<rect x="24" y="28" width="230" height="50" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="38" y="50" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#1b3a5c">Certificate Transparency</text>
+<text x="38" y="68" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#5b6b7b">what was issued</text>
+<path d="M254,53 C300,53 300,150 336,150" fill="none" stroke="#5b6b7b" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="24" y="90" width="230" height="50" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="38" y="112" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#1b3a5c">TLS handshake (SNI)</text>
+<text x="38" y="130" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#5b6b7b">what is served</text>
+<path d="M254,115 C300,115 300,150 336,150" fill="none" stroke="#5b6b7b" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="24" y="152" width="230" height="50" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="38" y="174" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#1b3a5c">Kubernetes + cert-manager</text>
+<text x="38" y="192" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#5b6b7b">what is managed</text>
+<path d="M254,177 C300,177 300,150 336,150" fill="none" stroke="#5b6b7b" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="24" y="214" width="230" height="50" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-dasharray="5 4"/>
+<text x="38" y="236" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#5b6b7b">Azure Key Vault</text>
+<text x="38" y="254" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#5b6b7b">planned</text>
+<path d="M254,239 C300,239 300,150 336,150" fill="none" stroke="#5b6b7b" stroke-width="1.5" marker-end="url(#a)" stroke-dasharray="5 4"/>
+<rect x="340" y="112" width="150" height="76" rx="10" fill="#f6f8fa" stroke="#1b3a5c" stroke-width="2"/>
+<text x="415" y="138" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#1b3a5c" text-anchor="middle">Correlate</text>
+<text x="415" y="158" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#5b6b7b" text-anchor="middle">one certificate, every</text>
+<text x="415" y="174" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#5b6b7b" text-anchor="middle">place it appears</text>
+<rect x="520" y="112" width="150" height="76" rx="10" fill="#f6f8fa" stroke="#0e8fa0" stroke-width="2" stroke-dasharray="5 4"/>
+<text x="595" y="138" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#0e8fa0" text-anchor="middle">Classify renewal</text>
+<text x="595" y="158" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#5b6b7b" text-anchor="middle">automatic · manual</text>
+<text x="595" y="174" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#5b6b7b" text-anchor="middle">· unknown</text>
+<path d="M490,150 L516,150" stroke="#5b6b7b" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M670,150 L696,150" stroke="#5b6b7b" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="700" y="96" width="156" height="108" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="778" y="122" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#1b3a5c" text-anchor="middle">Report</text>
+<text x="778" y="141" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5b6b7b" text-anchor="middle">table · JSON · CSV</text>
+<text x="778" y="160" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5b6b7b" text-anchor="middle">owner, location</text>
+<text x="778" y="179" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5b6b7b" text-anchor="middle">ct_only · live_only</text>
+<text x="778" y="198" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#5b6b7b" text-anchor="middle">exit code for CI</text>
+<text x="24" y="284" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#5b6b7b">Dashed: planned. Read-only everywhere: list and get, never write.</text>
+</svg>

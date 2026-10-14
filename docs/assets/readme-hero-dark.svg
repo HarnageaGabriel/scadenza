@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 320" width="880" height="320" role="img" aria-label="Maximum public TLS certificate lifetime: 398, 200, 100, then 47 days">
+<rect width="880" height="320" rx="12" fill="#0d1117" stroke="#30363d"/>
+<text x="28" y="40" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="17" font-weight="600" fill="#e6edf3">Maximum lifetime of a public TLS certificate</text>
+<text x="852" y="40" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#9aa7b4" text-anchor="end">CA/Browser Forum ballot SC-081v3</text>
+<text x="634" y="72" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#9aa7b4">renewals per year</text>
+<text x="28" y="111" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" fill="#e6edf3">until 2026-03-14</text>
+<rect x="190" y="92" width="420" height="28" rx="6" fill="#30363d"/>
+<rect x="190" y="92" width="420.0" height="28" rx="6" fill="#9fb6cf"/>
+<text x="200.0" y="111" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#0d1117">398 days</text>
+<text x="634" y="111" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#9fb6cf">≈ 1</text>
+<text x="28" y="159" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" fill="#e6edf3">from 2026-03-15</text>
+<rect x="190" y="140" width="420" height="28" rx="6" fill="#30363d"/>
+<rect x="190" y="140" width="211.1" height="28" rx="6" fill="#9fb6cf"/>
+<text x="200.0" y="159" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#0d1117">200 days</text>
+<text x="634" y="159" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#9fb6cf">≈ 2</text>
+<text x="680" y="159" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#9aa7b4">in force</text>
+<text x="28" y="207" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" fill="#e6edf3">from 2027-03-15</text>
+<rect x="190" y="188" width="420" height="28" rx="6" fill="#30363d"/>
+<rect x="190" y="188" width="105.5" height="28" rx="6" fill="#2bb3c4"/>
+<text x="200.0" y="207" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#0d1117">100 days</text>
+<text x="634" y="207" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#2bb3c4">≈ 4</text>
+<text x="680" y="207" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#fb923c">next step</text>
+<text x="28" y="255" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" fill="#e6edf3">from 2029-03-15</text>
+<rect x="190" y="236" width="420" height="28" rx="6" fill="#30363d"/>
+<rect x="190" y="236" width="49.6" height="28" rx="6" fill="#4fd1e0"/>
+<text x="247.6" y="255" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#e6edf3">47 days</text>
+<text x="634" y="255" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#4fd1e0">≈ 8</text>
+<text x="680" y="255" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#9aa7b4">DCV reuse: 10 days</text>
+<text x="28" y="300" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#9aa7b4">A manual renewal that happens once a year today becomes a job you do every quarter, then every six weeks.</text>
+</svg>
