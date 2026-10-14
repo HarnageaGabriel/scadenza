@@ -60,8 +60,7 @@ func writeCSV(writer io.Writer, certificates []ct.Certificate) error {
 
 // csvSafe neutralizes spreadsheet formula injection by prefixing a single quote.
 func csvSafe(value string) string {
-	if value != "" && strings.ContainsRune("=+-@	
-", rune(value[0])) {
+	if value != "" && strings.ContainsRune("=+-@	", rune(value[0])) {
 		return "'" + value
 	}
 	return value
