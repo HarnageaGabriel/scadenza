@@ -1,0 +1,12 @@
+FINGERPRINT SHA256                                                SERIAL  DAYS  100D     PUBLIC   OBSERVATIONS         ISSUER                NAMES
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  0a      90    ok       yes      ct-certspotter, tls  CN=Example Live Root  example.com, www.example.com
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb          200   exceeds  unknown  ct-certspotter       CN=Example Root       api.example.com
+cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc          90    ok       unknown  ct-certspotter       CN=Example Root       *.example.com
+dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  0d      90    ok       no       tls                  CN=Self Signed        example.com
+FINDINGS
+KIND          FINGERPRINT                                                       NAMES                         DETAIL
+exceeds-100d  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  api.example.com               validity exceeds 100 days; renewal must fit the 100-day limit
+live_only     dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  example.com                   presented by a probed host but absent from Certificate Transparency results; private_or_untrusted
+matched       aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  example.com, www.example.com  presented by a probed host and issued in Certificate Transparency
+not_checked   bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  api.example.com               not verified as absent: api.example.com (probe-error:refused)
+not_checked   cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  *.example.com                 not verified as absent: *.example.com (wildcard)

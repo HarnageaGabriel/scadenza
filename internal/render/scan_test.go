@@ -1,0 +1,285 @@
+package render
+
+import (
+	"bytes"
+	"encoding/csv"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/HarnageaGabriel/scadenza/internal/diag"
+	"github.com/HarnageaGabriel/scadenza/internal/inventory"
+)
+
+func sampleScanDocument() ScanDocument {
+	yes := true
+	return ScanDocument{
+		SchemaVersion: "scadenza.scan/v1",
+		GeneratedAt:   time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+		Domains:       []string{"example.com"},
+		SourcesUsed:   []string{"certspotter", "tls"},
+		Certificates: []inventory.Certificate{{
+			Fingerprint: strings.Repeat("a", 64), Serial: "abcdef", Names: []string{"example.com", "www.example.com"},
+			Issuer: "CN=Example CA", NotBefore: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+			LifetimeDays: 90, Verdict100D: "ok", Public: &yes,
+			Observations: []inventory.Observation{
+				{Source: inventory.SourceCertSpotter, Location: "certspotter", Detail: "Certificate Transparency issuance"},
+				{Source: inventory.SourceTLS, Location: "www.example.com:443", Detail: "leaf presented; trusted=true"},
+			},
+		}},
+		Findings: []inventory.Finding{
+			{Kind: inventory.KindMatched, Fingerprint: strings.Repeat("a", 64), Names: []string{"www.example.com"}, Detail: "matched"},
+			{Kind: inventory.KindCTOnly, Fingerprint: strings.Repeat("b", 64), Names: []string{"shop.example.com"}, Detail: "ct only"},
+			{Kind: inventory.KindLiveOnly, Fingerprint: strings.Repeat("c", 64), Names: []string{"api.example.com"}, Detail: "live only; private_or_untrusted"},
+			{Kind: inventory.KindNotChecked, Fingerprint: strings.Repeat("d", 64), Names: []string{"*.example.com"}, Detail: "not checked"},
+			{Kind: inventory.KindUnknown, Fingerprint: "", Names: []string{"x.example.com"}, Detail: "unknown"},
+			{Kind: inventory.KindExceeds100D, Fingerprint: strings.Repeat("e", 64), Names: []string{"long.example.com"}, Detail: "exceeds"},
+		},
+		Unresolved:  []inventory.Unresolved{{Name: "*.example.com", Reason: "wildcard", Detail: "wildcard"}},
+		ProbeErrors: []inventory.ProbeError{{Host: "api.example.com", Port: 443, Class: "refused", Detail: "probe api.example.com:443: refused"}},
+		Diagnostics: []diag.Diagnostic{},
+	}
+}
+
+func TestScanFormats(t *testing.T) {
+	document := sampleScanDocument()
+	for _, format := range []string{"json", "csv", "table"} {
+		t.Run(format, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := Scan(&output, format, document); err != nil {
+				t.Fatal(err)
+			}
+			if format == "json" && !strings.Contains(output.String(), "scadenza.scan/v1") {
+				t.Fatalf("output = %q", output.String())
+			}
+			if format == "table" && (!strings.Contains(output.String(), "FINDINGS") || !strings.Contains(output.String(), "live_only")) {
+				t.Fatalf("output = %q", output.String())
+			}
+			if format == "csv" && !strings.Contains(output.String(), "fingerprint_sha256,serial,names") {
+				t.Fatalf("output = %q", output.String())
+			}
+		})
+	}
+	if err := Scan(&bytes.Buffer{}, "xml", document); err == nil {
+		t.Fatal("expected format error")
+	}
+}
+
+type scanSchema struct {
+	Required   []string `json:"required"`
+	Properties struct {
+		Certificates struct {
+			Items struct {
+				AdditionalProperties *bool    `json:"additionalProperties"`
+				Required             []string `json:"required"`
+				Properties           map[string]struct {
+					Properties map[string]struct {
+						Enum []string `json:"enum"`
+					} `json:"properties"`
+				} `json:"properties"`
+			} `json:"items"`
+		} `json:"certificates"`
+		Findings struct {
+			Items struct {
+				Required   []string `json:"required"`
+				Properties struct {
+					Kind struct {
+						Enum []string `json:"enum"`
+					} `json:"kind"`
+				} `json:"properties"`
+			} `json:"items"`
+		} `json:"findings"`
+		Unresolved struct {
+			Items struct {
+				Properties struct {
+					Reason struct {
+						Enum []string `json:"enum"`
+					} `json:"reason"`
+				} `json:"properties"`
+			} `json:"items"`
+		} `json:"unresolved"`
+		ProbeErrors struct {
+			Items struct {
+				Properties struct {
+					Class struct {
+						Enum []string `json:"enum"`
+					} `json:"class"`
+				} `json:"properties"`
+			} `json:"items"`
+		} `json:"probe_errors"`
+	} `json:"properties"`
+}
+
+func loadScanSchema(t *testing.T) scanSchema {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "schema", "scan-v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema scanSchema
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	return schema
+}
+
+func TestScanJSONMatchesPublishedSchema(t *testing.T) {
+	schema := loadScanSchema(t)
+	var output bytes.Buffer
+	if err := Scan(&output, "json", sampleScanDocument()); err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(output.Bytes(), &object); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range schema.Required {
+		if _, ok := object[field]; !ok {
+			t.Errorf("required top-level field %q missing", field)
+		}
+	}
+	if len(object) != len(schema.Required) {
+		t.Fatalf("top-level fields = %v, schema requires %v", keys(object), schema.Required)
+	}
+
+	var document struct {
+		Certificates []map[string]json.RawMessage `json:"certificates"`
+		Findings     []map[string]json.RawMessage `json:"findings"`
+		Unresolved   []map[string]json.RawMessage `json:"unresolved"`
+		ProbeErrors  []map[string]json.RawMessage `json:"probe_errors"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	certificate := schema.Properties.Certificates.Items
+	if certificate.AdditionalProperties == nil || *certificate.AdditionalProperties {
+		t.Fatal("certificate schema must set additionalProperties false")
+	}
+	for _, emitted := range document.Certificates {
+		if diff := symdiff(keys(emitted), certificate.Required); diff != "" {
+			t.Errorf("certificate keys != schema required: %s", diff)
+		}
+		for name, rule := range certificate.Properties {
+			if _, ok := emitted[name]; !ok {
+				t.Errorf("schema certificate property %q not emitted", name)
+			}
+			if len(rule.Properties) == 0 {
+				continue
+			}
+			var observations []map[string]string
+			if err := json.Unmarshal(emitted[name], &observations); err != nil {
+				t.Fatalf("decode %s: %v", name, err)
+			}
+			sourceEnum := rule.Properties["source"].Enum
+			for _, observation := range observations {
+				if len(sourceEnum) > 0 && !slices.Contains(sourceEnum, observation["source"]) {
+					t.Errorf("observation source %q not in enum %v", observation["source"], sourceEnum)
+				}
+			}
+		}
+	}
+	for _, finding := range document.Findings {
+		for _, field := range schema.Properties.Findings.Items.Required {
+			if _, ok := finding[field]; !ok {
+				t.Errorf("finding missing %q", field)
+			}
+		}
+		var kind string
+		if err := json.Unmarshal(finding["kind"], &kind); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(schema.Properties.Findings.Items.Properties.Kind.Enum, kind) {
+			t.Errorf("finding kind %q not in enum", kind)
+		}
+	}
+	for _, unresolved := range document.Unresolved {
+		var reason string
+		if err := json.Unmarshal(unresolved["reason"], &reason); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(schema.Properties.Unresolved.Items.Properties.Reason.Enum, reason) {
+			t.Errorf("unresolved reason %q not in enum", reason)
+		}
+	}
+	for _, probeError := range document.ProbeErrors {
+		var class string
+		if err := json.Unmarshal(probeError["class"], &class); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(schema.Properties.ProbeErrors.Items.Properties.Class.Enum, class) {
+			t.Errorf("probe error class %q not in enum", class)
+		}
+	}
+}
+
+func TestScanCSVFormulaInjection(t *testing.T) {
+	for _, prefix := range []string{"=", "+", "-", "@", "\t", "\r"} {
+		no := false
+		document := ScanDocument{Certificates: []inventory.Certificate{{
+			Fingerprint: "f", Serial: prefix + "1", Names: []string{prefix + "name"}, Issuer: prefix + "CA",
+			Verdict100D: "ok", Public: &no,
+			Observations: []inventory.Observation{{Source: inventory.SourceTLS, Location: prefix + "host:443", Detail: prefix + "detail"}},
+		}}}
+		var output bytes.Buffer
+		if err := Scan(&output, "csv", document); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := csv.NewReader(&output).ReadAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := rows[1]
+		for _, index := range []int{1, 2, 3, 10, 11} {
+			if !strings.HasPrefix(row[index], "'"+prefix) {
+				t.Errorf("prefix %q column %d = %q", prefix, index, row[index])
+			}
+		}
+	}
+}
+
+func TestScanCSVRowPerObservation(t *testing.T) {
+	yes := true
+	document := ScanDocument{Certificates: []inventory.Certificate{{
+		Fingerprint: strings.Repeat("a", 64), Verdict100D: "ok", Public: &yes,
+		Observations: []inventory.Observation{
+			{Source: inventory.SourceCertSpotter, Location: "certspotter", Detail: "ct"},
+			{Source: inventory.SourceCrtSH, Location: "crtsh", Detail: "ct"},
+			{Source: inventory.SourceTLS, Location: "host:443", Detail: "tls"},
+		},
+	}}}
+	var output bytes.Buffer
+	if err := Scan(&output, "csv", document); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(&output).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("csv rows = %d, want 4", len(rows))
+	}
+}
+
+func keys(values map[string]json.RawMessage) []string {
+	result := make([]string, 0, len(values))
+	for key := range values {
+		result = append(result, key)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func symdiff(left, right []string) string {
+	sortedLeft := slices.Clone(left)
+	sortedRight := slices.Clone(right)
+	slices.Sort(sortedLeft)
+	slices.Sort(sortedRight)
+	if slices.Equal(sortedLeft, sortedRight) {
+		return ""
+	}
+	return "left=" + strings.Join(sortedLeft, ",") + " right=" + strings.Join(sortedRight, ",")
+}

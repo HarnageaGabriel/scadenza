@@ -52,6 +52,7 @@ func newRootCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return &commandError{code: ExitUsageError, err: err} })
 	root.AddCommand(newVersionCommand(stdout))
 	root.AddCommand(newCTCommand(stdout, stderr, dependencies))
+	root.AddCommand(newScanCommand(stdout, stderr, dependencies))
 	return root
 }
 

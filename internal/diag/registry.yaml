@@ -42,3 +42,39 @@ codes:
     summary: Certificate Transparency source fallback used
     explanation: A preferred Certificate Transparency source failed, so scadenza queried the next selected source.
     remediation: Review the preceding source diagnostic or retry the preferred source later.
+  - code: SCD-0008
+    slug: wildcard-name-not-probed
+    severity: warning
+    summary: Wildcard certificate name was not probed
+    explanation: A wildcard subject name was derived from Certificate Transparency. A wildcard covers no single host, so scadenza listed it as unresolved instead of guessing a host name.
+    remediation: Name a concrete host with --host to check the wildcard certificate.
+  - code: SCD-0009
+    slug: probe-host-cap-reached
+    severity: warning
+    summary: Probe host limit reached
+    explanation: More probe hosts were collected than --max-hosts permits, so the remaining hosts were listed as unresolved and were never probed.
+    remediation: Increase --max-hosts to probe every host.
+  - code: SCD-0010
+    slug: tls-probe-failed
+    severity: warning
+    summary: TLS probe failed
+    explanation: A TLS handshake could not be completed. The detail names the host and the failure class, one of dns, connect-timeout, refused, tls-alert, no-certificate, or handshake-failed.
+    remediation: Check the host name, network reachability, and whether the endpoint serves TLS on the probed port.
+  - code: SCD-0011
+    slug: certificate-not-trusted
+    severity: warning
+    summary: Presented certificate is not trusted
+    explanation: A probed host presented a certificate chain that does not verify against the system roots for the requested name. The certificate is reported but never trusted.
+    remediation: Confirm the endpoint certificate, chain, and name, or treat the certificate as private or untrusted.
+  - code: SCD-0012
+    slug: ct-only-finding
+    severity: warning
+    summary: Certificate Transparency certificate was not observed live
+    explanation: A certificate that is still valid in Certificate Transparency was not presented by any probed host.
+    remediation: Check whether the certificate is deployed, retired, or replaced by another certificate.
+  - code: SCD-0013
+    slug: live-only-finding
+    severity: warning
+    summary: Live certificate absent from Certificate Transparency
+    explanation: A probed host presented a certificate that the Certificate Transparency results for the scanned domains did not contain.
+    remediation: Confirm the certificate is publicly logged, or treat it as private or untrusted.

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/HarnageaGabriel/scadenza/docs/schema/scan-v1.schema.json",
+  "title": "scadenza scan output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "domains", "sources_used", "certificates", "findings", "unresolved", "probe_errors", "diagnostics"],
+  "properties": {
+    "schema_version": {"const": "scadenza.scan/v1"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "domains": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "sources_used": {"type": "array", "items": {"enum": ["certspotter", "crtsh", "tls"]}},
+    "certificates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fingerprint_sha256", "serial", "names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "public", "observations"],
+        "properties": {
+          "fingerprint_sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
+          "serial": {"type": "string"},
+          "names": {"type": "array", "items": {"type": "string"}},
+          "issuer": {"type": "string"},
+          "not_before": {"type": "string", "format": "date-time"},
+          "not_after": {"type": "string", "format": "date-time"},
+          "lifetime_days": {"type": "integer", "minimum": 0},
+          "verdict_100d": {"enum": ["ok", "exceeds", "unknown"]},
+          "public": {"type": ["boolean", "null"]},
+          "observations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source", "location", "detail"],
+              "properties": {
+                "source": {"enum": ["ct-certspotter", "ct-crtsh", "tls"]},
+                "location": {"type": "string"},
+                "detail": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "fingerprint", "names", "detail"],
+        "properties": {
+          "kind": {"enum": ["matched", "ct_only", "live_only", "not_checked", "unknown", "exceeds-100d"]},
+          "fingerprint": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
+          "names": {"type": "array", "items": {"type": "string"}},
+          "detail": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "reason", "detail"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "reason": {"enum": ["wildcard", "host-cap"]},
+          "detail": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "probe_errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["host", "port", "class", "detail"],
+        "properties": {
+          "host": {"type": "string", "minLength": 1},
+          "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "class": {"enum": ["dns", "connect-timeout", "refused", "tls-alert", "no-certificate", "handshake-failed"]},
+          "detail": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "slug", "severity", "summary", "explanation", "remediation"],
+        "properties": {
+          "code": {"type": "string", "pattern": "^SCD-[0-9]{4}$"},
+          "slug": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["error", "warning", "info"]},
+          "summary": {"type": "string", "minLength": 1},
+          "explanation": {"type": "string", "minLength": 1},
+          "remediation": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}
