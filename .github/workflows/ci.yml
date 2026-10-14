@@ -63,3 +63,13 @@ jobs:
           go-version: stable
           cache: true
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  goreleaser:
+    name: GoReleaser configuration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with: {distribution: goreleaser, version: '~> v2', args: check}
