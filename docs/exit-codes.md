@@ -30,10 +30,14 @@ When more than one condition holds, the highest-priority code wins. The order is
 ## Failure policy
 
 `--fail-on` selects which finding kinds cause exit 3. The default is
-`live_only,not-compliant-at-issuance`. `ct_only` is deliberately excluded (CDNs
-issue several certificates in parallel, so it is noisy) and `exceeds-100d` stays
-a readiness signal rather than a compliance failure. `none` disables exit 3.
-Every finding is still reported in the output; only the exit code changes.
+`live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded`.
+`ct_only` is deliberately excluded (CDNs issue several certificates in parallel,
+so it is noisy), `exceeds-100d` stays a readiness signal rather than a
+compliance failure, and the three remaining renewal kinds
+(`renew-before-loop-at-next-limit`, `duration-exceeds-next-limit`,
+`manual-renewal-after-limit`) are reported but do not fail by default. `none`
+disables exit 3. Every finding is still reported in the output; only the exit
+code changes.
 
 ## `scadenza ct`
 

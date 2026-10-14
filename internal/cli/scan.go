@@ -20,6 +20,7 @@ import (
 	"github.com/HarnageaGabriel/scadenza/internal/kube"
 	"github.com/HarnageaGabriel/scadenza/internal/owner"
 	"github.com/HarnageaGabriel/scadenza/internal/render"
+	"github.com/HarnageaGabriel/scadenza/internal/renewal"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
 	"github.com/HarnageaGabriel/scadenza/internal/version"
 	"github.com/spf13/cobra"
@@ -68,7 +69,8 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	var kubeQPS float64
 	var strict bool
 	var minCoverage int
-	var failOn, nowFlag, configPath string
+	var failOn, nowFlag, configPath, groupBy string
+	renewalModes := map[string]string{}
 	command := &cobra.Command{
 		Use:   "scan",
 		Short: "Correlate Certificate Transparency issuances with live TLS handshakes",
@@ -82,6 +84,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				}
 				applyScanConfig(command, loaded, &domains, &hosts, &hostsFile, &fromCT, &port,
 					&kubeEnabled, &kubeContext, &namespaces, &ownershipFile, &failOn, &strict, &minCoverage)
+				renewalModes = loaded.Renewal
 			}
 			failOnKinds, failErr := config.ParseFailOn(failOn)
 			if failErr != nil {
@@ -94,6 +97,10 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			}
 			if format != "table" && format != "json" && format != "csv" {
 				emitDiagnostic(stderr, "SCD-0001", "--format must be table, json, or csv")
+				return &commandError{code: ExitUsageError}
+			}
+			if groupBy != render.GroupNone && groupBy != render.GroupOwner && groupBy != render.GroupNames {
+				emitDiagnostic(stderr, "SCD-0001", "--group-by must be owner, names, or none")
 				return &commandError{code: ExitUsageError}
 			}
 			if port < 1 || port > 65535 || concurrency < 1 || maxHosts < 1 || timeout <= 0 {
@@ -261,13 +268,14 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			}
 
 			correlated, findings := inventory.Correlate(inventory.Input{
-				Domains:  normalizedDomains,
-				CT:       records,
-				Kube:     kubeCertificates,
-				Live:     live,
-				Errors:   probeErrors,
-				Unprobed: unprobed,
-				Now:      now,
+				Domains:      normalizedDomains,
+				CT:           records,
+				Kube:         kubeCertificates,
+				Live:         live,
+				Errors:       probeErrors,
+				RenewalModes: renewalModes,
+				Unprobed:     unprobed,
+				Now:          now,
 			})
 
 			for _, finding := range findings {
@@ -330,10 +338,11 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				Unresolved:    unresolved,
 				ProbeErrors:   probeErrors,
 				Diagnostics:   diagnostics.items,
+				Owners:        ownerSummaries(correlated),
 				Coverage:      coverage,
 			}
 
-			if err := render.Scan(stdout, format, document); err != nil {
+			if err := render.ScanGrouped(stdout, format, document, groupBy); err != nil {
 				return fmt.Errorf("render output: %w", err)
 			}
 			// Exit 4 needs an external data source (Certificate Transparency or
@@ -373,10 +382,25 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	command.Flags().Float64Var(&kubeQPS, "kube-qps", 5, "Kubernetes client request rate per second")
 	command.Flags().BoolVar(&strict, "strict", false, "exit 5 when any source is partial or failed, any probe failed, or any item was not checked")
 	command.Flags().IntVar(&minCoverage, "min-coverage", 0, "exit 5 when the coverage ratio is below this percentage (0-100)")
-	command.Flags().StringVar(&failOn, "fail-on", "live_only,not-compliant-at-issuance", "comma list of finding kinds that cause exit 3: ct_only, live_only, exceeds-100d, not-compliant-at-issuance, none")
+	command.Flags().StringVar(&failOn, "fail-on", "live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded", "comma list of finding kinds that cause exit 3: ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, none")
+	command.Flags().StringVar(&groupBy, "group-by", render.GroupNone, "table grouping: owner, names, or none (JSON is unchanged)")
 	command.Flags().StringVar(&nowFlag, "now", "", "evaluation instant as an RFC 3339 timestamp; defaults to the current time")
 	command.Flags().StringVar(&configPath, "config", "", "explicit YAML configuration file; never auto-loaded")
 	return command
+}
+
+// ownerSummaries aggregates the renewal workload per owner, as ADR 0006 (M4b)
+// requires. Certificates with no declared owner are grouped under "(unowned)".
+func ownerSummaries(certificates []inventory.Certificate) []renewal.OwnerSummary {
+	inputs := make([]renewal.OwnerCertificate, 0, len(certificates))
+	for _, certificate := range certificates {
+		entry := renewal.OwnerCertificate{Mode: certificate.Renewal.Mode, Health: certificate.Renewal.Health}
+		for _, declared := range certificate.Owners {
+			entry.Owners = append(entry.Owners, renewal.Owner{Value: declared.Value, Source: string(declared.Source)})
+		}
+		inputs = append(inputs, entry)
+	}
+	return renewal.SummarizeOwners(inputs)
 }
 
 // ctRequested reports whether Certificate Transparency was actually queried.

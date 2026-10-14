@@ -124,7 +124,7 @@ codes:
     slug: invalid-fail-on-kind
     severity: error
     summary: Invalid --fail-on kind
-    explanation: The --fail-on value listed a kind that is not one of ct_only, live_only, exceeds-100d, not-compliant-at-issuance, or none, or combined none with another kind.
+    explanation: The --fail-on value listed a kind that is not one of ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, or none, or combined none with another kind.
     remediation: Use only the documented kinds; pass none alone to disable exit 3.
   - code: SCD-0022
     slug: config-invalid
@@ -132,3 +132,33 @@ codes:
     summary: Configuration file could not be used
     explanation: The --config file could not be read, did not decode as strict YAML version 1, or set a value outside its documented range. Nothing is auto-loaded, so only an explicit --config is read.
     remediation: Fix the file to match docs/configuration.md; only known keys with valid values are accepted.
+  - code: SCD-0023
+    slug: renew-before-exceeds-lifetime
+    severity: warning
+    summary: Fixed renewBefore is not shorter than the issued lifetime
+    explanation: A cert-manager Certificate sets spec.renewBefore to a value at or beyond the actual issued lifetime (status.notBefore to status.notAfter, or the Secret leaf), so cert-manager renews in a loop. cert-manager requires spec.duration to be greater than spec.renewBefore.
+    remediation: Set spec.renewBeforePercentage instead of a fixed spec.renewBefore, so renewal follows the actual issued duration.
+  - code: SCD-0024
+    slug: renew-before-loop-at-next-limit
+    severity: warning
+    summary: Fixed renewBefore reaches the next shorter lifetime
+    explanation: A fixed spec.renewBefore is at or beyond the next CA/B maximum validity, or the next announced Let's Encrypt lifetime for an ACME issuer on acme-v02.api.letsencrypt.org. Renewal will loop once the shorter lifetime takes effect; the risk records the effective date.
+    remediation: Set spec.renewBeforePercentage so the renewal point follows the actual issued duration.
+  - code: SCD-0025
+    slug: duration-exceeds-next-limit
+    severity: warning
+    summary: Requested duration exceeds the next public-CA lifetime
+    explanation: A cert-manager Certificate with an ACME issuer on a known public CA directory requests a spec.duration longer than the next CA/B maximum validity. The public CA will issue a shorter lifetime than requested. An unknown ACME server produces no finding, only evidence.
+    remediation: Set spec.duration no longer than the next CA/B maximum validity, or confirm the issuer is a private CA.
+  - code: SCD-0026
+    slug: renewal-degraded
+    severity: warning
+    summary: Renewal health is degraded
+    explanation: A cert-manager Certificate reports Ready=False, status.renewalTime passed more than one hour before the evaluation instant, or status.notAfter has passed. The certificate is not being renewed as expected.
+    remediation: Inspect the Certificate conditions and issuer, and confirm the certificate is renewed before status.notAfter.
+  - code: SCD-0027
+    slug: manual-renewal-after-limit
+    severity: warning
+    summary: Manual renewal falls after the next CA/B step
+    explanation: An operator declared a domain as manually renewed in scadenza.yaml, and the certificate's notAfter falls after the next CA/B maximum validity step, so the manual renewal workload grows.
+    remediation: Move the certificate to an automatic renewal mechanism, or plan the additional manual renewals per year.

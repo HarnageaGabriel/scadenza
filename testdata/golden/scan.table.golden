@@ -1,8 +1,8 @@
-FINGERPRINT SHA256                                                SERIAL  DAYS  100D     PUBLIC   OBSERVATIONS         ISSUER                NAMES                         OWNERS
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  0a      90    ok       yes      ct-certspotter, tls  CN=Example Live Root  example.com, www.example.com  -
-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb          200   exceeds  unknown  ct-certspotter       CN=Example Root       api.example.com               -
-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc          90    ok       unknown  ct-certspotter       CN=Example Root       *.example.com                 -
-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  0d      90    ok       no       tls                  CN=Self Signed        example.com                   -
+FINGERPRINT SHA256                                                SERIAL  DAYS  100D     MODE     HEALTH   PUBLIC   OBSERVATIONS         ISSUER                NAMES                         OWNERS
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  0a      90    ok       unknown  unknown  yes      ct-certspotter, tls  CN=Example Live Root  example.com, www.example.com  -
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb          200   exceeds  unknown  unknown  unknown  ct-certspotter       CN=Example Root       api.example.com               -
+cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc          90    ok       unknown  unknown  unknown  ct-certspotter       CN=Example Root       *.example.com                 -
+dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  0d      90    ok       unknown  unknown  no       tls                  CN=Self Signed        example.com                   -
 FINDINGS
 KIND          FINGERPRINT                                                       NAMES                         DETAIL
 exceeds-100d  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  api.example.com               validity exceeds 100 days; renewal must fit the 100-day limit

@@ -14,6 +14,7 @@ import (
 	"github.com/HarnageaGabriel/scadenza/internal/diag"
 	"github.com/HarnageaGabriel/scadenza/internal/inventory"
 	"github.com/HarnageaGabriel/scadenza/internal/owner"
+	"github.com/HarnageaGabriel/scadenza/internal/renewal"
 )
 
 func sampleScanDocument() ScanDocument {
@@ -336,6 +337,40 @@ func TestScanTableStripsControlCharacters(t *testing.T) {
 	for _, want := range []string{"evil[31m.example.com", "ab.example.com", "line1line2"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("stripped output missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestScanTableRisksAndGrouping(t *testing.T) {
+	yes := true
+	document := ScanDocument{Certificates: []inventory.Certificate{
+		{
+			Fingerprint: strings.Repeat("a", 64), Names: []string{"api.example.com"}, Verdict100D: "ok", Public: &yes,
+			Owners:  []owner.Owner{{Value: "team-web", Source: owner.SourceLabel}},
+			Renewal: renewal.Classification{Mode: renewal.ModeAutomatic, Health: renewal.HealthDegraded, Risks: []renewal.Risk{{Kind: renewal.KindRenewalDegraded, Detail: "Ready=False"}}},
+		},
+		{
+			Fingerprint: strings.Repeat("b", 64), Names: []string{"www.example.com"}, Verdict100D: "ok", Public: &yes,
+			Renewal: renewal.Classification{Mode: renewal.ModeUnknown, Health: renewal.HealthUnknown},
+		},
+	}}
+	for _, groupBy := range []string{GroupOwner, GroupNames} {
+		var output bytes.Buffer
+		if err := ScanGrouped(&output, "table", document, groupBy); err != nil {
+			t.Fatal(err)
+		}
+		rendered := output.String()
+		if !strings.Contains(rendered, "GROUP "+groupBy+": ") {
+			t.Errorf("grouping %q missing:\n%s", groupBy, rendered)
+		}
+		if !strings.Contains(rendered, "MODE") || !strings.Contains(rendered, "HEALTH") {
+			t.Errorf("table missing MODE/HEALTH columns:\n%s", rendered)
+		}
+		if !strings.Contains(rendered, "RISKS") || !strings.Contains(rendered, renewal.KindRenewalDegraded) {
+			t.Errorf("table missing the risks summary:\n%s", rendered)
+		}
+		if groupBy == GroupOwner && !strings.Contains(rendered, "(unowned)") {
+			t.Errorf("table missing the unowned group:\n%s", rendered)
 		}
 	}
 }

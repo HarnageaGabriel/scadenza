@@ -32,13 +32,25 @@ kube:
     - payments
   ownershipFile: ownership.yaml
 
+# Declared renewal modes, per domain. The only accepted value is `manual`: it is
+# positive evidence for renewal classification. An automatic mechanism (a
+# cert-manager Certificate or annotated TLS Secret) still wins. See
+# renewal.md.
+renewal:
+  example.com: manual
+
 policy:
   # Finding kinds that cause exit 3. One of ct_only, live_only, exceeds-100d,
-  # not-compliant-at-issuance, or none alone. Default:
-  # [live_only, not-compliant-at-issuance].
+  # not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded,
+  # renew-before-loop-at-next-limit, duration-exceeds-next-limit,
+  # manual-renewal-after-limit, or none alone. Default:
+  # [live_only, not-compliant-at-issuance, renew-before-exceeds-lifetime,
+  # renewal-degraded].
   failOn:
     - live_only
     - not-compliant-at-issuance
+    - renew-before-exceeds-lifetime
+    - renewal-degraded
   # Exit 5 when any source is partial or failed, any probe failed, or any item
   # was not checked.
   strict: false
@@ -55,12 +67,13 @@ is used. The mapping is one flag per key: `--domain`/`domains`,
 `--port`/`port`, `--kube`/`kube.enabled`, `--kube-context`/`kube.context`,
 `--namespace`/`kube.namespaces`, `--ownership-file`/`kube.ownershipFile`,
 `--fail-on`/`policy.failOn`, `--strict`/`policy.strict`,
-`--min-coverage`/`policy.minCoverage`.
+`--min-coverage`/`policy.minCoverage`. There is no flag for `renewal`; it is
+only read from the file.
 
 ## Validation
 
 Decoding is strict. An unreadable file, an unknown key, a missing or wrong
 `version` (must be `1`), an out-of-range `port` or `minCoverage`, an unknown
-`policy.failOn` kind, or `none` combined with another kind is a usage error
-(exit 2). Unknown keys and bad values are reported as `SCD-0022`; a bad
+`policy.failOn` kind, a `renewal` value other than `manual`, or `none` combined
+with another kind is a usage error (exit 2). Unknown keys and bad values are reported as `SCD-0022`; a bad
 `failOn` kind is reported as `SCD-0021`.

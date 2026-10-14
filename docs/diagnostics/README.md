@@ -24,3 +24,8 @@ Generated from `internal/diag/registry.yaml`. Do not edit by hand.
 - [SCD-0020 — Scan did not check everything it was asked to check](SCD-0020.md)
 - [SCD-0021 — Invalid --fail-on kind](SCD-0021.md)
 - [SCD-0022 — Configuration file could not be used](SCD-0022.md)
+- [SCD-0023 — Fixed renewBefore is not shorter than the issued lifetime](SCD-0023.md)
+- [SCD-0024 — Fixed renewBefore reaches the next shorter lifetime](SCD-0024.md)
+- [SCD-0025 — Requested duration exceeds the next public-CA lifetime](SCD-0025.md)
+- [SCD-0026 — Renewal health is degraded](SCD-0026.md)
+- [SCD-0027 — Manual renewal falls after the next CA/B step](SCD-0027.md)

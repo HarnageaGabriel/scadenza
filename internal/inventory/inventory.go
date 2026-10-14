@@ -16,6 +16,7 @@ import (
 	"github.com/HarnageaGabriel/scadenza/internal/kube"
 	"github.com/HarnageaGabriel/scadenza/internal/owner"
 	"github.com/HarnageaGabriel/scadenza/internal/policy"
+	"github.com/HarnageaGabriel/scadenza/internal/renewal"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
 )
 
@@ -95,6 +96,10 @@ type Certificate struct {
 	// Owners lists every explicitly declared owner, each with the rule that
 	// produced it. It is empty when no ownership rule matched.
 	Owners []owner.Owner `json:"owners"`
+	// Renewal is the M4b renewal classification: mode, health, evidence, and
+	// the configuration risks that will break under shorter lifetimes. It is
+	// always present; missing evidence is reported as unknown.
+	Renewal renewal.Classification `json:"renewal"`
 }
 
 // Finding is one expected-versus-observed difference or status.
@@ -122,13 +127,17 @@ type ProbeError struct {
 
 // Input is the raw material for correlation.
 type Input struct {
-	Domains  []string
-	CT       []ct.Certificate
-	Kube     []kube.Certificate
-	Live     []tlsprobe.Result
-	Errors   []ProbeError
-	Unprobed map[string]string
-	Now      time.Time
+	Domains []string
+	CT      []ct.Certificate
+	Kube    []kube.Certificate
+	Live    []tlsprobe.Result
+	Errors  []ProbeError
+	// RenewalModes maps a domain to an explicitly declared renewal mode from
+	// scadenza.yaml (only "manual"). It is evidence, never an override of an
+	// automatic mechanism.
+	RenewalModes map[string]string
+	Unprobed     map[string]string
+	Now          time.Time
 }
 
 type accumulator struct {
@@ -331,9 +340,18 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		}
 		certificate.Owners = sortedOwners(entry.owners)
 		certificate.Observations = sortedObservations(entry.observations)
+		certificate.Renewal = renewal.Classify(renewalInput(certificate, in))
 		kind, detail := classify(entry, states, in.Domains, certificate, now)
 		result = append(result, certificate)
 		findings = append(findings, Finding{Kind: kind, Fingerprint: certificate.Fingerprint, Names: certificate.Names, Detail: detail})
+		for _, risk := range certificate.Renewal.Risks {
+			findings = append(findings, Finding{
+				Kind:        risk.Kind,
+				Fingerprint: certificate.Fingerprint,
+				Names:       certificate.Names,
+				Detail:      risk.Detail,
+			})
+		}
 		if certificate.Verdict100D == "exceeds" && !certificate.NotAfter.Before(now) {
 			findings = append(findings, Finding{
 				Kind:        KindExceeds100D,
@@ -538,6 +556,77 @@ func normalizeSerial(value string) string {
 	value = strings.ReplaceAll(value, ":", "")
 	value = strings.TrimPrefix(value, "0x")
 	value = strings.TrimLeft(value, "0")
+	return value
+}
+
+// renewalInput assembles the pure renewal classification input from the facts
+// already correlated for one certificate. It adds no new reads: every field
+// comes from an observation or from the CT records already fetched.
+func renewalInput(certificate Certificate, in Input) renewal.Input {
+	input := renewal.Input{
+		Names:        certificate.Names,
+		NotBefore:    certificate.NotBefore,
+		NotAfter:     certificate.NotAfter,
+		Policy:       certificate.Policy,
+		DeclaredMode: renewal.Mode(declaredRenewalMode(certificate.Names, in.RenewalModes)),
+		Now:          in.Now,
+	}
+	for _, observation := range certificate.Observations {
+		switch observation.Source {
+		case SourceCertSpotter, SourceCrtSH:
+			input.HasCT = true
+		case SourceTLS:
+			input.HasLive = true
+		case SourceKubeSecret:
+			input.HasKube = true
+			if observation.Kubernetes != nil {
+				input.Secrets = append(input.Secrets, renewal.Secret{CertificateName: observation.Kubernetes.CertificateName})
+			}
+		case SourceCertManager:
+			input.HasKube = true
+			if observation.Kubernetes != nil && input.Manager == nil {
+				resource := observation.Kubernetes
+				input.Manager = &renewal.Manager{
+					IssuerType:     resource.IssuerType,
+					ACMEServer:     resource.ACMEServer,
+					Duration:       resource.Duration,
+					RenewBefore:    resource.RenewBefore,
+					StatusNotAfter: resource.NotAfter,
+					RenewalTime:    resource.RenewalTime,
+					Ready:          resource.Ready,
+					ReadyReason:    resource.ReadyReason,
+				}
+			}
+		}
+	}
+	for _, record := range in.CT {
+		input.CT = append(input.CT, renewal.Issuance{Names: record.SubjectNames, NotBefore: record.NotBefore})
+	}
+	return input
+}
+
+// declaredRenewalMode returns the explicitly declared renewal mode for any of
+// the certificate's names, using the same domain (and subdomain) matching as
+// ownership. An empty result means nothing was declared.
+func declaredRenewalMode(names []string, modes map[string]string) string {
+	if len(modes) == 0 {
+		return ""
+	}
+	best, value := "", ""
+	for _, name := range names {
+		normalized := strings.TrimSuffix(strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "*.")), ".")
+		if normalized == "" {
+			continue
+		}
+		for domain, mode := range modes {
+			if normalized != domain && !strings.HasSuffix(normalized, "."+domain) {
+				continue
+			}
+			if len(domain) > len(best) || (len(domain) == len(best) && domain < best) {
+				best, value = domain, mode
+			}
+		}
+	}
 	return value
 }
 

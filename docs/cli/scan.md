@@ -11,6 +11,7 @@ scadenza scan --domain example.com --format json
 scadenza scan --domain example.com --host www.example.com:8443 --source crtsh
 scadenza scan --from-ct=false --hosts-file hosts.txt
 scadenza scan --domain example.com --strict --min-coverage 90 --fail-on live_only
+scadenza scan --kube --group-by owner
 scadenza scan --config scadenza.yaml
 scadenza scan --domain example.com --now 2027-04-01T00:00:00Z --format json
 ```
@@ -46,8 +47,13 @@ derived names are listed in `unresolved` with reason `host-cap` and reported as
 - `--min-coverage <0-100>` exits 5 (`SCD-0020`) when the coverage ratio is below
   this percentage.
 - `--fail-on k1,k2` selects the finding kinds that cause exit 3. One or more of
-  `ct_only`, `live_only`, `exceeds-100d`, `not-compliant-at-issuance`, or `none`
-  alone. Default `live_only,not-compliant-at-issuance`.
+  `ct_only`, `live_only`, `exceeds-100d`, `not-compliant-at-issuance`,
+  `renew-before-exceeds-lifetime`, `renewal-degraded`,
+  `renew-before-loop-at-next-limit`, `duration-exceeds-next-limit`,
+  `manual-renewal-after-limit`, or `none` alone. Default
+  `live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded`.
+- `--group-by owner|names|none` (default `none`) groups the table rows by the
+  first owner or the first certificate name. It never changes JSON or CSV.
 - `--now RFC3339` fixes the evaluation instant. The same input then gives the
   same output, and you can evaluate against a future date. It also sets
   `generated_at`.
@@ -73,14 +79,24 @@ reports the issuer kind and name, the resolved issuer type (`acme`, `ca`,
 `selfSigned`, `vault`, `venafi`, `external`, or `unknown`, taken only when
 exactly one recognized `spec` key has a map value), the ACME directory server URL, `spec.duration`,
 `spec.renewBefore`, `status.notAfter`, `status.renewalTime`, and the `Ready`
-condition. These raw facts are stored now so that M5 can classify renewal
-without re-reading the cluster. Private keys and `privateKeySecretRef` targets
-are never read.
+condition, and the `cert-manager.io/certificate-name` annotation of a TLS
+Secret. M4b classifies renewal from these facts without re-reading the cluster;
+see [renewal](../renewal.md). Private keys and `privateKeySecretRef` targets are
+never read.
 
 Kubernetes certificates that do not verify against the system roots keep the
 inventory entry but get no 100-day verdict: `verdict_100d` is `not_applicable`
 and `public` stays `null` (unknown). A certificate seen only in Kubernetes is
 reported with the finding kind `kube_only`.
+
+## Renewal
+
+Every certificate carries `renewal` `{mode, health, evidence, risks}`. `mode` is
+`automatic`, `manual`, or `unknown`; `health` is `healthy`, `degraded`,
+`configured`, or `unknown`. Missing evidence is `unknown`, never a guess. The
+full rules, sources, and risk kinds are in [renewal](../renewal.md). The scan
+document also carries a top-level `owners` workload summary with the manual
+renewals per year at 200, 100, and 47 days.
 
 Owners come only from labels, annotations, namespaces, and an optional mapping
 file; see [ownership](../ownership.md). Each owner records its source in the
@@ -171,6 +187,15 @@ Findings are deterministic and sorted. The kinds are:
 - `not-compliant-at-issuance` - the lifetime exceeds the maximum validity in
   force at issuance. Fails by default.
 - `kube_only` - read from Kubernetes and not observed in CT or a live handshake.
+- `renew-before-exceeds-lifetime` - a fixed `spec.renewBefore` is at or beyond
+  the issued lifetime. Fails by default.
+- `renewal-degraded` - renewal health is degraded. Fails by default.
+- `renew-before-loop-at-next-limit` - a fixed `spec.renewBefore` reaches the
+  next shorter lifetime. Reported only.
+- `duration-exceeds-next-limit` - a requested `spec.duration` exceeds the next
+  public-CA lifetime. Reported only.
+- `manual-renewal-after-limit` - a manual renewal falls after the next CA/B
+  step. Reported only.
 
 Never infer: a comparison the evidence cannot settle is `not_checked`, and a
 record that cannot be correlated at all is `unknown`.
@@ -209,14 +234,20 @@ nothing else applies. `2` on usage errors. See
 
 JSON follows [`scadenza.scan/v1`](../schema/scan-v1.schema.json) and contains
 `certificates`, `findings`, `unresolved`, `probe_errors`, `diagnostics`, and
-`coverage`. The table prints the certificates, the findings summary, and the
+`coverage`. The table prints the certificates (with `MODE` and `HEALTH`), the
+findings summary, a `RISKS` summary when any certificate has a risk, and the
 one-line coverage summary. CSV emits one row per (certificate, observation) and
 reuses the `scadenza ct` formula-injection escaping (a leading single quote for
 cells starting with `=`, `+`, `-`, `@`, tab, or carriage return).
 
-The certificate object gains `correlation_method` and `policy`. The document
-gains `coverage`, and `findings.kind` gains `not-compliant-at-issuance`, all
+The certificate object gains `correlation_method`, `policy`, and `renewal`
+(`mode`, `health`, `evidence`, `risks`). The document gains `coverage` and the
+top-level `owners` workload summary, `findings.kind` gains
+`not-compliant-at-issuance` and the five renewal risk kinds, and the certificate
+table gains `MODE` and `HEALTH` columns plus a `RISKS` summary at the end, all
 within `scadenza.scan/v1` under the rules of
 [ADR 0007](../adr/0007-json-compatibility.md). It also carries the M3 additions:
 `owners`, the per-observation `kubernetes` object, and the Kubernetes
 `sources_used`, `verdict_100d`, findings kind, and observation source values.
+
+

@@ -18,8 +18,21 @@ import (
 // FailOnNone disables exit 3 when it is the only fail-on kind.
 const FailOnNone = "none"
 
-// FailOnKinds lists the accepted --fail-on kinds in canonical order.
-var FailOnKinds = []string{"ct_only", "live_only", "exceeds-100d", "not-compliant-at-issuance", FailOnNone}
+// FailOnKinds lists the accepted --fail-on kinds in canonical order. The
+// renewal kinds come from M4b: renew-before-exceeds-lifetime and
+// renewal-degraded fail by default, the rest are reported only.
+var FailOnKinds = []string{
+	"ct_only",
+	"live_only",
+	"exceeds-100d",
+	"not-compliant-at-issuance",
+	"renew-before-exceeds-lifetime",
+	"renewal-degraded",
+	"renew-before-loop-at-next-limit",
+	"duration-exceeds-next-limit",
+	"manual-renewal-after-limit",
+	FailOnNone,
+}
 
 // ErrUnknownFailOnKind marks an unrecognized --fail-on kind.
 var ErrUnknownFailOnKind = errors.New("unknown fail-on kind")
@@ -33,7 +46,21 @@ var ErrInvalid = errors.New("invalid configuration")
 // DefaultFailOn is the documented default failure policy. ct_only is reported
 // but excluded (CDNs issue several certificates in parallel, so it is noisy),
 // and exceeds-100d stays a readiness signal rather than a compliance failure.
-func DefaultFailOn() []string { return []string{"live_only", "not-compliant-at-issuance"} }
+// M4b turns on renew-before-exceeds-lifetime and renewal-degraded: both mean
+// renewal is broken or about to loop now, not merely a configuration that may
+// break later.
+func DefaultFailOn() []string {
+	return []string{
+		"live_only",
+		"not-compliant-at-issuance",
+		"renew-before-exceeds-lifetime",
+		"renewal-degraded",
+	}
+}
+
+// RenewalManual is the only accepted renewal declaration value: the operator
+// renews the certificate by hand.
+const RenewalManual = "manual"
 
 // Config is a parsed configuration file.
 type Config struct {
@@ -45,6 +72,9 @@ type Config struct {
 	Port      *int
 	Kube      Kube
 	Policy    Policy
+	// Renewal maps a domain to a declared renewal mode (only "manual"). It is
+	// evidence for renewal classification: an automatic mechanism still wins.
+	Renewal map[string]string
 }
 
 // Kube configures the Kubernetes source.
@@ -63,14 +93,15 @@ type Policy struct {
 }
 
 type document struct {
-	Version   int        `yaml:"version"`
-	Domains   []string   `yaml:"domains"`
-	Hosts     []string   `yaml:"hosts"`
-	HostsFile string     `yaml:"hostsFile"`
-	FromCT    *bool      `yaml:"fromCT"`
-	Port      *int       `yaml:"port"`
-	Kube      *kubeDoc   `yaml:"kube"`
-	Policy    *policyDoc `yaml:"policy"`
+	Version   int               `yaml:"version"`
+	Domains   []string          `yaml:"domains"`
+	Hosts     []string          `yaml:"hosts"`
+	HostsFile string            `yaml:"hostsFile"`
+	FromCT    *bool             `yaml:"fromCT"`
+	Port      *int              `yaml:"port"`
+	Kube      *kubeDoc          `yaml:"kube"`
+	Policy    *policyDoc        `yaml:"policy"`
+	Renewal   map[string]string `yaml:"renewal"`
 }
 
 type kubeDoc struct {
@@ -141,7 +172,31 @@ func Parse(data []byte) (Config, error) {
 		}
 		config.Policy.FailOn = kinds
 	}
+	renewal, renewalErr := normalizeRenewal(decoded.Renewal)
+	if renewalErr != nil {
+		return Config{}, renewalErr
+	}
+	config.Renewal = renewal
 	return config, nil
+}
+
+// normalizeRenewal validates the per-domain renewal declarations. Only the
+// documented manual mode is accepted, so a typo cannot silently change a
+// classification.
+func normalizeRenewal(values map[string]string) (map[string]string, error) {
+	result := make(map[string]string, len(values))
+	for domain, mode := range values {
+		normalized := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(domain, "*.")))
+		if normalized == "" {
+			return nil, fmt.Errorf("%w: renewal keys must be non-empty domains", ErrInvalid)
+		}
+		value := strings.ToLower(strings.TrimSpace(mode))
+		if value != RenewalManual {
+			return nil, fmt.Errorf("%w: renewal for %q must be %q", ErrInvalid, domain, RenewalManual)
+		}
+		result[normalized] = value
+	}
+	return result, nil
 }
 
 // ParseFailOn parses a comma-separated --fail-on value.

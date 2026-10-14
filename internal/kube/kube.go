@@ -64,6 +64,13 @@ const defaultLimit = 500
 // tlsSecretFieldSelector asks the API server for TLS secrets only.
 const tlsSecretFieldSelector = "type=kubernetes.io/tls" //nolint:gosec // G101: a Kubernetes field selector, not a credential.
 
+// certificateNameAnnotation is the cert-manager Secret annotation that names the
+// Certificate managing it. It is already read for ownership resolution and is
+// exposed so renewal classification can tell a managed Secret from an
+// unmanaged one. See docs/renewal.md.
+// https://cert-manager.io/docs/usage/certificate/
+const certificateNameAnnotation = "cert-manager.io/certificate-name"
+
 // The only secret keys scadenza knows about. tls.crt is read; tls.key is dropped
 // from the object as soon as it is decoded and is never read, copied, logged, or
 // retained.
@@ -93,6 +100,10 @@ type Kubernetes struct {
 	RenewalTime string `json:"status_renewal_time,omitempty"`
 	Ready       string `json:"ready,omitempty"`
 	ReadyReason string `json:"ready_reason,omitempty"`
+	// CertificateName is the cert-manager.io/certificate-name annotation of a
+	// kubernetes.io/tls Secret, empty when the Secret is unmanaged. It is
+	// already read for ownership; renewal classification reuses it.
+	CertificateName string `json:"certificate_name,omitempty"`
 }
 
 // Observation is one place a certificate was read.
@@ -338,9 +349,10 @@ func (s *Scanner) certificatesFromSecret(secret corev1.Secret, namespaces map[st
 			Location: location,
 			Detail:   "kubernetes.io/tls secret",
 			Kubernetes: &Kubernetes{
-				Resource:  "kubernetes.io/tls",
-				Namespace: secret.Namespace,
-				Name:      secret.Name,
+				Resource:        "kubernetes.io/tls",
+				Namespace:       secret.Namespace,
+				Name:            secret.Name,
+				CertificateName: secret.Annotations[certificateNameAnnotation],
 			},
 		}},
 	}

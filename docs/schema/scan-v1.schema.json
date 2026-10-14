@@ -4,7 +4,7 @@
   "title": "scadenza scan output v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "generated_at", "domains", "sources_used", "certificates", "findings", "unresolved", "probe_errors", "diagnostics", "coverage"],
+  "required": ["schema_version", "generated_at", "domains", "sources_used", "certificates", "findings", "unresolved", "probe_errors", "diagnostics", "owners", "coverage"],
   "properties": {
     "schema_version": {"const": "scadenza.scan/v1"},
     "generated_at": {"type": "string", "format": "date-time"},
@@ -15,7 +15,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["fingerprint_sha256", "serial", "names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "correlation_method", "policy", "public", "observations", "owners"],
+        "required": ["fingerprint_sha256", "serial", "names", "issuer", "not_before", "not_after", "lifetime_days", "verdict_100d", "correlation_method", "policy", "public", "observations", "owners", "renewal"],
         "properties": {
           "fingerprint_sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
           "serial": {"type": "string"},
@@ -52,6 +52,41 @@
               }
             }
           },
+          "renewal": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode", "health", "evidence", "risks"],
+            "properties": {
+              "mode": {"enum": ["automatic", "manual", "unknown"]},
+              "health": {"enum": ["healthy", "degraded", "configured", "unknown"]},
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["source", "fact", "value"],
+                  "properties": {
+                    "source": {"enum": ["cert-manager", "ct", "tls", "kube-secret", "config"]},
+                    "fact": {"type": "string", "minLength": 1},
+                    "value": {"type": "string"}
+                  }
+                }
+              },
+              "risks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "detail"],
+                  "properties": {
+                    "kind": {"enum": ["renew-before-exceeds-lifetime", "renew-before-loop-at-next-limit", "duration-exceeds-next-limit", "renewal-degraded", "manual-renewal-after-limit"]},
+                    "detail": {"type": "string", "minLength": 1},
+                    "effective": {"type": "string"}
+                  }
+                }
+              }
+            }
+          },
           "observations": {
             "type": "array",
             "items": {
@@ -80,7 +115,8 @@
                     "status_not_after": {"type": "string"},
                     "status_renewal_time": {"type": "string"},
                     "ready": {"type": "string"},
-                    "ready_reason": {"type": "string"}
+                    "ready_reason": {"type": "string"},
+                    "certificate_name": {"type": "string"}
                   }
                 }
               }
@@ -127,6 +163,33 @@
           "port": {"type": "integer", "minimum": 1, "maximum": 65535},
           "class": {"enum": ["dns", "connect-timeout", "refused", "canceled", "tls-alert", "no-certificate", "handshake-failed"]},
           "detail": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "owners": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["owner", "owner_source", "certificates", "automatic", "manual", "unknown", "degraded", "manual_renewals_per_year"],
+        "properties": {
+          "owner": {"type": "string", "minLength": 1},
+          "owner_source": {"enum": ["", "label", "annotation", "namespace-label", "namespace-annotation", "mapping-file"]},
+          "certificates": {"type": "integer", "minimum": 0},
+          "automatic": {"type": "integer", "minimum": 0},
+          "manual": {"type": "integer", "minimum": 0},
+          "unknown": {"type": "integer", "minimum": 0},
+          "degraded": {"type": "integer", "minimum": 0},
+          "manual_renewals_per_year": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["200d", "100d", "47d"],
+            "properties": {
+              "200d": {"type": "integer", "minimum": 0},
+              "100d": {"type": "integer", "minimum": 0},
+              "47d": {"type": "integer", "minimum": 0}
+            }
+          }
         }
       }
     },
