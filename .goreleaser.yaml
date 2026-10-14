@@ -1,31 +1,63 @@
 version: 2
 
+project_name: scadenza
+
 builds:
   - id: scadenza
     main: ./cmd/scadenza
-    binary: scadenza
-    env: [CGO_ENABLED=0]
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/HarnageaGabriel/scadenza/internal/version.Version={{.Version}}
-      - -X github.com/HarnageaGabriel/scadenza/internal/version.Commit={{.Commit}}
-      - -X github.com/HarnageaGabriel/scadenza/internal/version.Date={{.Date}}
+      - -X github.com/HarnageaGabriel/scadenza/internal/version.Version={{ .Version }}
+      - -X github.com/HarnageaGabriel/scadenza/internal/version.Commit={{ .Commit }}
+      - -X github.com/HarnageaGabriel/scadenza/internal/version.Date={{ .Date }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
 
 archives:
   - formats: [tar.gz]
     format_overrides:
       - goos: windows
         formats: [zip]
+    files: [LICENSE, NOTICE, README.md, CHANGELOG.md]
 
 checksum:
   name_template: checksums.txt
 
-# TODO: enable after creating the tap repository.
+sboms:
+  - artifacts: archive
+    # VERIFY: confirm the configured SBOM tool is available in the release image.
+    cmd: syft
+    args: ["{{ .ArtifactPath }}", "-o", "spdx-json={{ .Output }}"]
+
+signs:
+  - artifacts: checksum
+    cmd: cosign
+    args: [sign-blob, "${artifact}", --bundle, "${signature}", --yes]
+    signature: "${artifact}.bundle"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Bug fixes
+      regexp: '^fix'
+      order: 1
+    - title: Other changes
+      order: 999
+
+release:
+  draft: true
+
+# TODO: Enable after HarnageaGabriel/homebrew-tap and a release token secret exist.
 # brews:
 #   - repository:
 #       owner: HarnageaGabriel
 #       name: homebrew-tap
-#     homepage: https://github.com/HarnageaGabriel/scadenza
-#     description: Public TLS certificate lifetime readiness CLI
+#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"

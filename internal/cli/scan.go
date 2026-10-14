@@ -37,18 +37,31 @@ type probeTarget struct {
 	port int
 }
 
+type ctSourceStats struct {
+	attempted int
+	succeeded int
+	failed    int
+}
+
 type diagnosticSet struct {
 	seen  map[string]bool
 	items []diag.Diagnostic
 }
 
 func (set *diagnosticSet) add(code, _ string) {
+	set.addSeverity(code, "")
+}
+
+func (set *diagnosticSet) addSeverity(code string, severity diag.Severity) {
 	if set.seen == nil {
 		set.seen = map[string]bool{}
 	}
 	item, ok := diag.Lookup(code)
 	if !ok || set.seen[code] {
 		return
+	}
+	if severity != "" {
+		item.Severity = severity
 	}
 	set.seen[code] = true
 	set.items = append(set.items, item)
@@ -143,7 +156,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			targets := dedupeTargets(explicitTargets)
 			explicitNames := map[string]bool{}
 			for _, target := range targets {
-				explicitNames[target.host+":"+strconv.Itoa(target.port)] = true
+				explicitNames[targetKey(target)] = true
 			}
 			chosen, err := resolveSources(sourceNames, dependencies.sources)
 			if err != nil {
@@ -171,6 +184,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			ctRequested := ctRequestedFor(fromCT, normalizedDomains)
 			kubeRequested := kubeEnabled
 			kubeAvailable := false
+			kubeProblems := 0
 			var kubeCertificates []kube.Certificate
 			if kubeEnabled {
 				source, loadErr := dependencies.loadKube(kube.LoadOptions{
@@ -178,7 +192,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 					Kubeconfig: kubeconfig,
 					QPS:        kubeQPS,
 					UserAgent:  "scadenza/" + version.Version,
-				}, kube.Options{Namespaces: namespaces, Owners: owners, Secrets: kubeSecrets})
+				}, kube.Options{Namespaces: namespaces, Owners: owners, Secrets: kubeSecrets, Clock: evaluationClock})
 				if loadErr != nil {
 					diagnostics.add(kube.CodeUnreachable, "")
 					emitDiagnostic(stderr, kube.CodeUnreachable, "")
@@ -189,6 +203,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 						emitDiagnostic(stderr, kube.CodeSecretDataRead, detail)
 					}
 					scanResult, scanErr := source.Scan(command.Context())
+					kubeProblems = len(scanResult.Problems)
 					for _, problem := range scanResult.Problems {
 						diagnostics.add(problem.Code, problem.Resource)
 						emitDiagnostic(stderr, problem.Code, kubeProblemDetail(problem))
@@ -204,13 +219,19 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 
 			var records []ct.Certificate
 			usedCT := map[string]bool{}
+			ctStats := map[string]ctSourceStats{}
 			ctAvailable := false
 			if fromCT && len(normalizedDomains) > 0 {
 				for _, domain := range normalizedDomains {
 					var failed []string
 					for _, source := range chosen {
+						name := source.Name()
+						stats := ctStats[name]
+						stats.attempted++
 						found, searchErr := source.Search(command.Context(), ct.Query{Domain: domain, IncludeSubdomains: true, Now: now})
 						if searchErr == nil {
+							stats.succeeded++
+							ctStats[name] = stats
 							// Record the fallback only now that the next source
 							// actually answered; a failed fallback is not a fallback.
 							if len(failed) > 0 {
@@ -219,26 +240,28 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 								emitDiagnostic(stderr, "SCD-0007", previous+" -> "+source.Name())
 							}
 							records = append(records, found...)
-							usedCT[source.Name()] = true
+							usedCT[name] = true
 							ctAvailable = true
 							break
 						}
 						code := sourceErrorCode(searchErr)
-						diagnostics.add(code, source.Name())
-						emitDiagnostic(stderr, code, source.Name())
-						failed = append(failed, source.Name())
+						stats.failed++
+						ctStats[name] = stats
+						diagnostics.add(code, name)
+						emitDiagnostic(stderr, code, name)
+						failed = append(failed, name)
 					}
 				}
 				derived, wildcards := deriveHosts(records, normalizedDomains, port)
 				available := make([]probeTarget, 0, len(derived))
 				for _, target := range dedupeTargets(derived) {
-					if !explicitNames[target.host+":"+strconv.Itoa(target.port)] {
+					if !explicitNames[targetKey(target)] {
 						available = append(available, target)
 					}
 				}
 				if len(available) > maxHosts {
 					for _, target := range available[maxHosts:] {
-						unprobed[target.host] = "host-cap"
+						unprobed[targetKey(target)] = "host-cap"
 					}
 					diagnostics.add("SCD-0009", fmt.Sprint(maxHosts))
 					emitDiagnostic(stderr, "SCD-0009", strconv.Itoa(maxHosts))
@@ -259,6 +282,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			if concrete, ok := prober.(*tlsprobe.Prober); ok {
 				clone := *concrete
 				clone.Timeout = timeout
+				clone.Clock = evaluationClock
 				prober = &clone
 			}
 			live, probeErrors, probed := runProbes(command.Context(), prober, targets, concurrency)
@@ -332,7 +356,8 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				}
 			}
 			coverage := inventory.NewCoverage(len(targets)+capped, probed, len(probeErrors), namesNotChecked,
-				coverageSources(ctRequested, chosen, usedCT, kubeRequested, kubeAvailable, len(targets), probed, len(probeErrors)))
+				coverageSources(ctRequested, chosen, ctStats, kubeRequested, kubeAvailable, kubeProblems,
+					len(targets), probed, len(probeErrors)))
 
 			document := render.ScanDocument{
 				SchemaVersion: "scadenza.scan/v1",
@@ -348,23 +373,42 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				Coverage:      coverage,
 			}
 
+			sourceUnavailable := sourcesUnavailable(
+				sourceState{requested: ctRequested, available: ctAvailable},
+				sourceState{requested: kubeRequested, available: kubeAvailable},
+			)
+			blocking := blockingFinding(failOnKinds, findings)
+			incompleteDetail, incomplete := incompleteScan(strict, minCoverage, coverage, findings, unresolved)
+			higherExit := sourceUnavailable || blocking
+			if incomplete {
+				severity := diag.SeverityError
+				if higherExit {
+					severity = diag.SeverityWarning
+				}
+				diagnostics.addSeverity("SCD-0020", severity)
+				document.Diagnostics = diagnostics.items
+			}
+
 			if err := render.ScanGrouped(stdout, format, document, groupBy); err != nil {
 				return fmt.Errorf("render output: %w", err)
+			}
+			if incomplete {
+				severity := diag.SeverityError
+				if higherExit {
+					severity = diag.SeverityWarning
+				}
+				emitDiagnosticSeverity(stderr, "SCD-0020", incompleteDetail, severity)
 			}
 			// Exit 4 needs an external data source (Certificate Transparency or
 			// Kubernetes) that was selected and failed entirely. A failed TLS
 			// probe is a probe_errors entry, not an unavailable source.
-			if sourcesUnavailable(
-				sourceState{requested: ctRequested, available: ctAvailable},
-				sourceState{requested: kubeRequested, available: kubeAvailable},
-			) {
+			if sourceUnavailable {
 				return &commandError{code: ExitSourceUnavailable}
 			}
-			if blockingFinding(failOnKinds, findings) {
+			if blocking {
 				return &commandError{code: ExitFindingsPresent}
 			}
-			if detail, incomplete := incompleteScan(strict, minCoverage, coverage, findings, unresolved); incomplete {
-				emitDiagnostic(stderr, "SCD-0020", detail)
+			if incomplete {
 				return &commandError{code: ExitIncompleteScan}
 			}
 			return nil
@@ -389,7 +433,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	command.Flags().Float64Var(&kubeQPS, "kube-qps", 5, "Kubernetes client request rate per second")
 	command.Flags().BoolVar(&strict, "strict", false, "exit 5 when any source is partial or failed, any probe failed, or any item was not checked")
 	command.Flags().IntVar(&minCoverage, "min-coverage", 0, "exit 5 when the coverage ratio is below this percentage (0-100)")
-	command.Flags().StringVar(&failOn, "fail-on", "live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded", "comma list of finding kinds that cause exit 3: ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, none")
+	command.Flags().StringVar(&failOn, "fail-on", "live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded", "comma list of finding kinds that cause exit 3: ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, renewal-config-invalid, none")
 	command.Flags().StringVar(&groupBy, "group-by", render.GroupNone, "table grouping: owner, names, or none (JSON is unchanged)")
 	command.Flags().StringVar(&nowFlag, "now", "", "evaluation instant as an RFC 3339 timestamp; defaults to the current time")
 	command.Flags().StringVar(&configPath, "config", "", "explicit YAML configuration file; never auto-loaded")
@@ -415,40 +459,59 @@ func ctRequestedFor(fromCT bool, domains []string) bool { return fromCT && len(d
 
 // coverageSources reports the health of every known source for the coverage
 // object, always including not_requested entries so the set is deterministic.
-func coverageSources(ctRequested bool, chosen []ct.Source, usedCT map[string]bool, kubeRequested, kubeAvailable bool, targets, probed, failed int) []inventory.SourceCoverage {
+func coverageSources(ctRequested bool, chosen []ct.Source, ctStats map[string]ctSourceStats,
+	kubeRequested, kubeAvailable bool, kubeProblems, targets, probed, failed int,
+) []inventory.SourceCoverage {
 	chosenNames := map[string]bool{}
 	for _, source := range chosen {
 		chosenNames[source.Name()] = true
 	}
 	result := make([]inventory.SourceCoverage, 0, 4)
 	for _, name := range []string{"certspotter", "crtsh", "kube", "tls"} {
-		entry := inventory.SourceCoverage{Name: name, Status: inventory.SourceStatusNotRequested}
+		entry := inventory.SourceCoverage{Name: name, Status: inventory.SourceStatusNotRequested, Detail: "not requested"}
 		switch name {
 		case "certspotter", "crtsh":
 			if ctRequested && chosenNames[name] {
-				if usedCT[name] {
-					entry.Status = inventory.SourceStatusOK
-				} else {
+				stats, attempted := ctStats[name]
+				switch {
+				case !attempted:
+					entry.Detail = "not needed: earlier source answered"
+				case stats.failed > 0 && stats.succeeded > 0:
+					entry.Status = inventory.SourceStatusPartial
+					entry.Detail = fmt.Sprintf("%d succeeded, %d failed", stats.succeeded, stats.failed)
+				case stats.failed > 0:
 					entry.Status = inventory.SourceStatusFailed
+					entry.Detail = fmt.Sprintf("%d attempt(s) failed", stats.failed)
+				default:
+					entry.Status = inventory.SourceStatusOK
+					entry.Detail = "queried"
 				}
 			}
 		case "kube":
-			if kubeRequested {
-				if kubeAvailable {
-					entry.Status = inventory.SourceStatusOK
-				} else {
-					entry.Status = inventory.SourceStatusFailed
-				}
+			switch {
+			case !kubeRequested:
+			case !kubeAvailable:
+				entry.Status = inventory.SourceStatusFailed
+				entry.Detail = "source unavailable"
+			case kubeProblems > 0:
+				entry.Status = inventory.SourceStatusPartial
+				entry.Detail = fmt.Sprintf("%d problem(s) recorded", kubeProblems)
+			default:
+				entry.Status = inventory.SourceStatusOK
+				entry.Detail = "queried"
 			}
 		case "tls":
 			if targets > 0 {
 				switch {
 				case failed == 0:
 					entry.Status = inventory.SourceStatusOK
+					entry.Detail = fmt.Sprintf("%d target(s) probed", probed)
 				case probed > 0:
 					entry.Status = inventory.SourceStatusPartial
+					entry.Detail = fmt.Sprintf("%d of %d target(s) probed", probed, targets)
 				default:
 					entry.Status = inventory.SourceStatusFailed
+					entry.Detail = fmt.Sprintf("%d target(s) failed", failed)
 				}
 			}
 		}
@@ -496,6 +559,21 @@ func incompleteScan(strict bool, minCoverage int, coverage inventory.Coverage, f
 			return "strict: " + strconv.Itoa(len(unresolved)) + " name(s) were not checked", true
 		}
 	}
+	if minCoverage > 0 {
+		producedData := false
+		for _, source := range coverage.Sources {
+			if source.Status == inventory.SourceStatusOK || source.Status == inventory.SourceStatusPartial {
+				producedData = true
+			}
+			if coverage.TargetsRequested == 0 && source.Status != inventory.SourceStatusNotRequested &&
+				source.Status != inventory.SourceStatusOK {
+				return fmt.Sprintf("no probe targets and source %s is %s", source.Name, source.Status), true
+			}
+		}
+		if !producedData {
+			return "no requested source produced data", true
+		}
+	}
 	if minCoverage > 0 && coverage.Ratio*100 < float64(minCoverage) {
 		return fmt.Sprintf("coverage %.2f%% is below --min-coverage %d%%", coverage.Ratio*100, minCoverage), true
 	}
@@ -504,7 +582,8 @@ func incompleteScan(strict bool, minCoverage int, coverage inventory.Coverage, f
 
 // configErrorCode classifies a configuration error to its SCD code.
 func configErrorCode(err error) string {
-	if errors.Is(err, config.ErrUnknownFailOnKind) || errors.Is(err, config.ErrFailOnNoneCombined) {
+	if errors.Is(err, config.ErrUnknownFailOnKind) || errors.Is(err, config.ErrFailOnNoneCombined) ||
+		errors.Is(err, config.ErrEmptyFailOnList) {
 		return "SCD-0021"
 	}
 	return "SCD-0022"
@@ -680,6 +759,10 @@ func resolveSources(names []string, available map[string]ct.Source) ([]ct.Source
 		chosen = append(chosen, source)
 	}
 	return chosen, nil
+}
+
+func targetKey(target probeTarget) string {
+	return target.host + ":" + strconv.Itoa(target.port)
 }
 
 func readHostsFile(path string) ([]string, error) {

@@ -208,12 +208,12 @@ func TestScanKubernetesSecretDataOptIn(t *testing.T) {
 			t.Fatalf("cluster was reported unreachable: %s", output)
 		case "SCD-0015":
 			t.Fatalf("secrets manifest still forbids Secret reads: %s", output)
-		case "SCD-0028":
+		case "SCD-0029":
 			foundSecretReadDiagnostic = true
 		}
 	}
 	if !foundSecretReadDiagnostic {
-		t.Fatalf("missing SCD-0028 Secret-data diagnostic: %s", output)
+		t.Fatalf("missing SCD-0029 Secret-data diagnostic: %s", output)
 	}
 
 	locations := map[string]bool{}

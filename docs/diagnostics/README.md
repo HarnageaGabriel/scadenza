@@ -29,4 +29,5 @@ Generated from `internal/diag/registry.yaml`. Do not edit by hand.
 - [SCD-0025 — Requested duration exceeds the next public-CA lifetime](SCD-0025.md)
 - [SCD-0026 — Renewal health is degraded](SCD-0026.md)
 - [SCD-0027 — Manual renewal falls after the next CA/B step](SCD-0027.md)
-- [SCD-0028 — Kubernetes Secret data reads are enabled](SCD-0028.md)
+- [SCD-0028 — cert-manager Certificate spec value is invalid](SCD-0028.md)
+- [SCD-0029 — Kubernetes Secret data reads are enabled](SCD-0029.md)

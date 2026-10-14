@@ -50,6 +50,14 @@ func sampleScanDocument() ScanDocument {
 			{Kind: inventory.KindUnknown, Fingerprint: "", Names: []string{"x.example.com"}, Detail: "unknown"},
 			{Kind: inventory.KindExceeds100D, Fingerprint: strings.Repeat("e", 64), Names: []string{"long.example.com"}, Detail: "exceeds"},
 			{Kind: inventory.KindKubeOnly, Fingerprint: strings.Repeat("b", 64), Names: []string{"api.payments.example.com"}, Detail: "read from Kubernetes"},
+			// Every M4b renewal risk kind is produced here so the published
+			// findings.kind enum is proven to accept all of them.
+			{Kind: renewal.KindRenewBeforeExceedsLifetime, Fingerprint: strings.Repeat("a", 64), Names: []string{"example.com"}, Detail: "renewBefore is not shorter than the issued lifetime"},
+			{Kind: renewal.KindRenewBeforeLoopAtNextLimit, Fingerprint: strings.Repeat("a", 64), Names: []string{"example.com"}, Detail: "renewBefore reaches the next shorter lifetime"},
+			{Kind: renewal.KindDurationExceedsNextLimit, Fingerprint: strings.Repeat("a", 64), Names: []string{"example.com"}, Detail: "requested duration exceeds the next public-CA lifetime"},
+			{Kind: renewal.KindRenewalDegraded, Fingerprint: strings.Repeat("a", 64), Names: []string{"example.com"}, Detail: "renewal health is degraded"},
+			{Kind: renewal.KindManualRenewalAfterLimit, Fingerprint: strings.Repeat("b", 64), Names: []string{"api.payments.example.com"}, Detail: "manual renewal is due after the next step"},
+			{Kind: renewal.KindRenewalConfigInvalid, Fingerprint: strings.Repeat("b", 64), Names: []string{"api.payments.example.com"}, Detail: "spec.duration must be greater than spec.renewBefore"},
 		},
 		Unresolved:  []inventory.Unresolved{{Name: "*.example.com", Reason: "wildcard", Detail: "wildcard"}},
 		ProbeErrors: []inventory.ProbeError{{Host: "api.example.com", Port: 443, Class: "refused", Detail: "probe api.example.com:443: refused"}},
@@ -229,6 +237,31 @@ func TestScanJSONMatchesPublishedSchema(t *testing.T) {
 		}
 		if !slices.Contains(schema.Properties.Findings.Items.Properties.Kind.Enum, kind) {
 			t.Errorf("finding kind %q not in enum", kind)
+		}
+	}
+	// M4b renewal risk kinds are findings too, so the published enum must accept
+	// each one and the sample document must exercise each one.
+	emitted := map[string]bool{}
+	for _, finding := range document.Findings {
+		var kind string
+		if err := json.Unmarshal(finding["kind"], &kind); err != nil {
+			t.Fatal(err)
+		}
+		emitted[kind] = true
+	}
+	for _, kind := range []string{
+		renewal.KindRenewBeforeExceedsLifetime,
+		renewal.KindRenewBeforeLoopAtNextLimit,
+		renewal.KindDurationExceedsNextLimit,
+		renewal.KindRenewalDegraded,
+		renewal.KindManualRenewalAfterLimit,
+		renewal.KindRenewalConfigInvalid,
+	} {
+		if !emitted[kind] {
+			t.Errorf("the sample document emits no %q finding", kind)
+		}
+		if !slices.Contains(schema.Properties.Findings.Items.Properties.Kind.Enum, kind) {
+			t.Errorf("renewal finding kind %q not in the published enum", kind)
 		}
 	}
 	for _, unresolved := range document.Unresolved {

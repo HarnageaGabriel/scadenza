@@ -7,7 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
 )
 
 // The project publishes JSON Schema (draft 2020-12) files in docs/schema and
@@ -50,6 +54,18 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 			execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &bytes.Buffer{}, scanDependencies("http://127.0.0.1:1", goldenProber()))
 			return stdout.Bytes()
 		}},
+		{"scan strict with default sources", "scan-v1.schema.json", func(t *testing.T) []byte {
+			body := fmt.Sprintf(`[{"id":"1","cert_sha256":"%s","dns_names":["example.com"],"issuer":{"name":"CN=Example Root"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-04-01T00:00:00Z","revoked":false}]`, strings.Repeat("a", 64))
+			server := certSpotterServer(t, body)
+			prober := fakeProber{results: map[string]tlsprobe.Result{
+				"example.com:443": {Fingerprint: strings.Repeat("a", 64), Names: []string{"example.com"}, Issuer: "CN=Example Root", NotBefore: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), Trusted: true},
+			}}
+			var stdout, stderr bytes.Buffer
+			if code := execute([]string{"scan", "--domain", "example.com", "--fail-on", "none", "--strict", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober)); code != ExitOK {
+				t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+			}
+			return stdout.Bytes()
+		}},
 		{"scan strict", "scan-v1.schema.json", func(t *testing.T) []byte {
 			server := certSpotterServer(t, scanCTFixture())
 			var stdout bytes.Buffer
@@ -59,6 +75,13 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 		{"scan kube", "scan-v1.schema.json", func(t *testing.T) []byte {
 			var stdout bytes.Buffer
 			if code := execute([]string{"scan", "--kube", "--format", "json"}, &stdout, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
+				t.Fatalf("kube scan exit = %d", code)
+			}
+			return stdout.Bytes()
+		}},
+		{"scan kube secrets", "scan-v1.schema.json", func(t *testing.T) []byte {
+			var stdout bytes.Buffer
+			if code := execute([]string{"scan", "--kube", "--kube-secrets", "--format", "json"}, &stdout, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
 				t.Fatalf("kube scan exit = %d", code)
 			}
 			return stdout.Bytes()
@@ -73,6 +96,26 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 				t.Fatalf("decode output: %v\n%s", err, output)
 			}
 			validateAgainstSchema(t, "$", schema, document)
+		})
+	}
+}
+
+func TestSchemaValidatorRejectsNullArrays(t *testing.T) {
+	scan := loadSchema(t, "scan-v1.schema.json")
+	properties := scan["properties"].(map[string]any)
+	coverage := properties["coverage"].(map[string]any)["properties"].(map[string]any)
+	cases := []struct {
+		name   string
+		schema map[string]any
+	}{
+		{"certificates", properties["certificates"].(map[string]any)},
+		{"sources", coverage["sources"].(map[string]any)},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if matchesType(test.schema["type"], nil) {
+				t.Fatalf("null unexpectedly matches schema type %v", test.schema["type"])
+			}
 		})
 	}
 }

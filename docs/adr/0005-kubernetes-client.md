@@ -79,7 +79,7 @@ set and exact `notAfter`, in which case the weak correlation is recorded as
 `names_and_expiry`.
 
 The original typed Secret list is retained only behind `--kube-secrets` (or
-`kube.secrets: true`). That opt-in emits `SCD-0028`, reads `tls.crt`, and keeps
+`kube.secrets: true`). That opt-in emits `SCD-0029`, reads `tls.crt`, and keeps
 the immediate `tls.key` removal described above. The default RBAC manifest no
 longer grants any Secret access; a separate opt-in manifest grants Secret
 `list`/`get` cluster-wide and documents a per-namespace Role alternative.

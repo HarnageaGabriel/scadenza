@@ -11,10 +11,12 @@ import "time"
 // Source: CA/Browser Forum Baseline Requirements, SC-081v3 (adopted 2025),
 // which schedules a maximum certificate validity and a maximum DCV reuse of
 // 200 days from 2026-03-15, 100 days from 2027-03-15, and 47/10 days from
-// 2029-03-15. Before 2026-03-15 the BRs allowed a 398-day validity (BR 6.3.2)
-// and 398-day DCV reuse (BR 4.2.1).
-// VERIFY: confirm each effective date and the pre-2026 398-day values against
-// the published SC-081 ballot and the BR change history.
+// 2029-03-15. Certificate validity before 2026 follows the BR section 6.3.2
+// history: 39 months (modeled as 1186 days) through 2018-02-28, 825 days
+// through 2020-08-31, then 398 days through 2026-03-14. DCV reuse remains
+// 398 days before the 2026 step (BR 4.2.1).
+// VERIFY: confirm the dated BR section 6.3.2 validity history, the 39-month
+// day count, and every effective date against the published BR change history.
 var (
 	// Effective200Days is when the 200/200-day limits take effect.
 	Effective200Days = time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
@@ -24,13 +26,6 @@ var (
 	// take effect.
 	Effective47Days = time.Date(2029, 3, 15, 0, 0, 0, 0, time.UTC)
 )
-
-// BackdateTolerance is how far a certificate notBefore may precede the actual
-// issuance instant. A CA may backdate notBefore by up to 24 hours, so a
-// certificate is assessed against the most permissive limit in force anywhere
-// in [notBefore, notBefore+BackdateTolerance]. VERIFY: confirm the exact BR
-// backdating allowance before tightening this tolerance.
-const BackdateTolerance = 24 * time.Hour
 
 // Limits are the maximum certificate validity and DCV reuse in whole days.
 type Limits struct {
@@ -43,7 +38,9 @@ var schedule = []struct {
 	effective time.Time
 	limits    Limits
 }{
-	{time.Time{}, Limits{MaxValidityDays: 398, DCVReuseDays: 398}},
+	{time.Time{}, Limits{MaxValidityDays: 1186, DCVReuseDays: 398}},
+	{time.Date(2018, 3, 1, 0, 0, 0, 0, time.UTC), Limits{MaxValidityDays: 825, DCVReuseDays: 398}},
+	{time.Date(2020, 9, 1, 0, 0, 0, 0, time.UTC), Limits{MaxValidityDays: 398, DCVReuseDays: 398}},
 	{Effective200Days, Limits{MaxValidityDays: 200, DCVReuseDays: 200}},
 	{Effective100Days, Limits{MaxValidityDays: 100, DCVReuseDays: 100}},
 	{Effective47Days, Limits{MaxValidityDays: 47, DCVReuseDays: 10}},
@@ -90,20 +87,15 @@ type Assessment struct {
 // Assess evaluates one certificate against the dated validity limits.
 //
 // compliant_at_issuance is true when the exact lifetime (notAfter - notBefore)
-// is at or below the maximum validity in force at issuance. Because notBefore
-// may be backdated, the most permissive limit within [notBefore,
-// notBefore+BackdateTolerance] is used; this never reports a certificate that
-// was compliant when its CA signed it as non-compliant. fits_next_limit is
-// true when the lifetime also fits the next scheduled limit; when no further
-// step exists it equals compliant_at_issuance and next_limit_effective is "".
+// is at or below the maximum validity in force at issuance.
+// fits_next_limit is true when the lifetime also fits the next scheduled
+// limit; when no further step exists it equals compliant_at_issuance and
+// next_limit_effective is "".
 func Assess(notBefore, notAfter time.Time) Assessment {
 	if notBefore.IsZero() || notAfter.IsZero() || notAfter.Before(notBefore) {
 		return Assessment{}
 	}
 	maxAtIssuance := MaxValidityAt(notBefore)
-	if tolerant := MaxValidityAt(notBefore.Add(BackdateTolerance)); tolerant > maxAtIssuance {
-		maxAtIssuance = tolerant
-	}
 	lifetime := notAfter.Sub(notBefore)
 	compliant := lifetime <= time.Duration(maxAtIssuance)*24*time.Hour
 

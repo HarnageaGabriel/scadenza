@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/HarnageaGabriel/scadenza/internal/ct"
+	"github.com/HarnageaGabriel/scadenza/internal/owner"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,6 +34,7 @@ var FailOnKinds = []string{
 	"renew-before-loop-at-next-limit",
 	"duration-exceeds-next-limit",
 	"manual-renewal-after-limit",
+	"renewal-config-invalid",
 	FailOnNone,
 }
 
@@ -39,6 +43,9 @@ var ErrUnknownFailOnKind = errors.New("unknown fail-on kind")
 
 // ErrFailOnNoneCombined marks `none` combined with another kind.
 var ErrFailOnNoneCombined = errors.New("fail-on none cannot be combined with other kinds")
+
+// ErrEmptyFailOnList marks an empty or whitespace-only fail-on list.
+var ErrEmptyFailOnList = errors.New("fail-on list must not be empty")
 
 // ErrInvalid marks a configuration file that does not match the schema.
 var ErrInvalid = errors.New("invalid configuration")
@@ -126,7 +133,18 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config file: %w", err)
 	}
-	return Parse(data)
+	config, err := Parse(data)
+	if err != nil {
+		return Config{}, err
+	}
+	base := filepath.Dir(path)
+	if config.HostsFile != "" && !filepath.IsAbs(config.HostsFile) {
+		config.HostsFile = filepath.Join(base, config.HostsFile)
+	}
+	if config.Kube.OwnershipFile != "" && !filepath.IsAbs(config.Kube.OwnershipFile) {
+		config.Kube.OwnershipFile = filepath.Join(base, config.Kube.OwnershipFile)
+	}
+	return config, nil
 }
 
 // Parse decodes a configuration document with strict key checking.
@@ -166,14 +184,13 @@ func Parse(data []byte) (Config, error) {
 		if decoded.Policy.MinCoverage != nil && (*decoded.Policy.MinCoverage < 0 || *decoded.Policy.MinCoverage > 100) {
 			return Config{}, fmt.Errorf("%w: minCoverage must be between 0 and 100", ErrInvalid)
 		}
-		kinds, err := ParseFailOnList(decoded.Policy.FailOn)
-		if err != nil {
-			return Config{}, err
+		if decoded.Policy.FailOn != nil {
+			kinds, err := ParseFailOnList(decoded.Policy.FailOn)
+			if err != nil {
+				return Config{}, err
+			}
+			config.Policy.FailOn = kinds
 		}
-		if decoded.Policy.FailOn != nil && len(kinds) == 0 {
-			return Config{}, fmt.Errorf("%w: failOn must list at least one kind or none", ErrInvalid)
-		}
-		config.Policy.FailOn = kinds
 	}
 	renewal, renewalErr := normalizeRenewal(decoded.Renewal)
 	if renewalErr != nil {
@@ -183,15 +200,17 @@ func Parse(data []byte) (Config, error) {
 	return config, nil
 }
 
-// normalizeRenewal validates the per-domain renewal declarations. Only the
-// documented manual mode is accepted, so a typo cannot silently change a
-// classification.
+// normalizeRenewal validates the per-domain renewal declarations. Keys are
+// normalized with the shared domain normalizer, so "*.Example.COM." and
+// "example.com" are the same key, and a malformed key is rejected instead of
+// silently failing to match a certificate name. Only the documented manual mode
+// is accepted, so a typo cannot silently change a classification.
 func normalizeRenewal(values map[string]string) (map[string]string, error) {
 	result := make(map[string]string, len(values))
 	for domain, mode := range values {
-		normalized := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(domain, "*.")))
-		if normalized == "" {
-			return nil, fmt.Errorf("%w: renewal keys must be non-empty domains", ErrInvalid)
+		normalized := owner.NormalizeDomain(domain)
+		if _, err := ct.NormalizeDomain(normalized); err != nil {
+			return nil, fmt.Errorf("%w: renewal key %q is not a valid domain", ErrInvalid, domain)
 		}
 		value := strings.ToLower(strings.TrimSpace(mode))
 		if value != RenewalManual {
@@ -208,7 +227,8 @@ func ParseFailOn(value string) ([]string, error) {
 }
 
 // ParseFailOnList validates and normalizes a list of fail-on kinds. An empty
-// list disables exit 3, exactly like the single kind `none`.
+// or whitespace-only list is invalid; only the explicit kind `none` disables
+// exit 3.
 func ParseFailOnList(values []string) ([]string, error) {
 	present := map[string]bool{}
 	for _, raw := range values {
@@ -220,6 +240,9 @@ func ParseFailOnList(values []string) ([]string, error) {
 			return nil, fmt.Errorf("%w: %q", ErrUnknownFailOnKind, kind)
 		}
 		present[kind] = true
+	}
+	if len(present) == 0 {
+		return nil, ErrEmptyFailOnList
 	}
 	if present[FailOnNone] && len(present) > 1 {
 		return nil, ErrFailOnNoneCombined

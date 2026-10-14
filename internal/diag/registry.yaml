@@ -124,7 +124,7 @@ codes:
     slug: invalid-fail-on-kind
     severity: error
     summary: Invalid --fail-on kind
-    explanation: The --fail-on value listed a kind that is not one of ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, or none, or combined none with another kind.
+    explanation: The --fail-on value listed a kind that is not one of ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, renewal-config-invalid, or none, or combined none with another kind.
     remediation: Use only the documented kinds; pass none alone to disable exit 3.
   - code: SCD-0022
     slug: config-invalid
@@ -142,13 +142,13 @@ codes:
     slug: renew-before-loop-at-next-limit
     severity: warning
     summary: Fixed renewBefore reaches the next shorter lifetime
-    explanation: A fixed spec.renewBefore is at or beyond the next CA/B maximum validity, or the next announced Let's Encrypt lifetime for an ACME issuer on acme-v02.api.letsencrypt.org. Renewal will loop once the shorter lifetime takes effect; the risk records the effective date.
+    explanation: A fixed spec.renewBefore is at or beyond the next CA/B maximum validity, or the next announced Let's Encrypt lifetime for an ACME issuer on acme-v02.api.letsencrypt.org. The next step is chosen at the evaluation instant (--now), so a step that already took effect is never reported with a stale date. Renewal will loop once the shorter lifetime takes effect; the risk records the effective date. The announced Let's Encrypt lifetimes are not confirmed while the VERIFY marker on their dates stands.
     remediation: Set spec.renewBeforePercentage so the renewal point follows the actual issued duration.
   - code: SCD-0025
     slug: duration-exceeds-next-limit
     severity: warning
     summary: Requested duration exceeds the next public-CA lifetime
-    explanation: A cert-manager Certificate with an ACME issuer on a known public CA directory requests a spec.duration longer than the next CA/B maximum validity. The public CA will issue a shorter lifetime than requested. An unknown ACME server produces no finding, only evidence.
+    explanation: A cert-manager Certificate with an ACME issuer on a known public CA directory requests a spec.duration longer than the CA/B maximum validity that governs the next issuance, chosen at the evaluation instant (--now) as the next scheduled step, or the step in force when no further step remains. When spec.duration is absent, cert-manager's documented 90-day default is used and recorded as the evidence fact duration-source=default. The public CA will issue a shorter lifetime than requested. An unknown ACME server produces no finding, only evidence.
     remediation: Set spec.duration no longer than the next CA/B maximum validity, or confirm the issuer is a private CA.
   - code: SCD-0026
     slug: renewal-degraded
@@ -163,6 +163,12 @@ codes:
     explanation: An operator declared a domain as manually renewed in scadenza.yaml, and the certificate's notAfter falls after the next CA/B maximum validity step, so the manual renewal workload grows.
     remediation: Move the certificate to an automatic renewal mechanism, or plan the additional manual renewals per year.
   - code: SCD-0028
+    slug: renewal-config-invalid
+    severity: warning
+    summary: cert-manager Certificate spec value is invalid
+    explanation: A cert-manager Certificate sets spec.duration, spec.renewBefore, or spec.renewBeforePercentage to a value cert-manager's own validation rejects. spec.duration must be at least 1h, the effective spec.renewBefore must be at least 5m, spec.duration must be greater than spec.renewBefore, and spec.renewBeforePercentage must be an integer percentage between 1 and 99 of the actual issued lifetime.
+    remediation: Fix the Certificate spec so cert-manager accepts it; spec.renewBeforePercentage is computed from the actual issued lifetime, which is what keeps renewal working as lifetimes shorten.
+  - code: SCD-0029
     slug: kube-secret-data-read
     severity: info
     summary: Kubernetes Secret data reads are enabled

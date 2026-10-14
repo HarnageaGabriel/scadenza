@@ -77,6 +77,7 @@ const (
 	FactRenewalOverdue       = "renewal-overdue"
 	FactNotAfterPassed       = "not-after-passed"
 	FactHealthCapped         = "health-capped-by-issuer-type"
+	FactDurationSource       = "duration-source"
 )
 
 // Risk kinds. They are stable finding kinds and each has a diagnostic page.
@@ -95,6 +96,24 @@ const (
 	// KindManualRenewalAfterLimit reports a manual renewal that falls after the
 	// next CA/B step.
 	KindManualRenewalAfterLimit = "manual-renewal-after-limit"
+	// KindRenewalConfigInvalid reports a spec.duration, spec.renewBefore, or
+	// spec.renewBeforePercentage value that cert-manager itself rejects.
+	KindRenewalConfigInvalid = "renewal-config-invalid"
+)
+
+// cert-manager's own validity constraints on a Certificate spec. A value that
+// violates one of them is rejected by the API server, so it is reported as the
+// distinct renewal-config-invalid risk rather than folded into a lifetime risk.
+//
+// Source: https://cert-manager.io/docs/usage/certificate/
+const (
+	// minimumDuration is the smallest accepted spec.duration.
+	minimumDuration = time.Hour
+	// minimumRenewBefore is the smallest accepted effective renewBefore.
+	minimumRenewBefore = 5 * time.Minute
+	// defaultDuration is the documented cert-manager default applied when
+	// spec.duration is absent: 90 days.
+	defaultDuration = 90 * 24 * time.Hour
 )
 
 // OverlappedRenewalFraction is the fraction of a lifetime that cert-manager
@@ -166,14 +185,15 @@ type Classification struct {
 // Manager carries the cert-manager Certificate facts already read from the
 // cluster. No new field is read for classification.
 type Manager struct {
-	IssuerType     string
-	ACMEServer     string
-	Duration       string
-	RenewBefore    string
-	StatusNotAfter string
-	RenewalTime    string
-	Ready          string
-	ReadyReason    string
+	IssuerType            string
+	ACMEServer            string
+	Duration              string
+	RenewBefore           string
+	RenewBeforePercentage string
+	StatusNotAfter        string
+	RenewalTime           string
+	Ready                 string
+	ReadyReason           string
 }
 
 // Secret carries the cert-manager annotation of one kubernetes.io/tls Secret.
@@ -183,10 +203,16 @@ type Secret struct {
 	CertificateName string
 }
 
-// Issuance is one Certificate Transparency issuance for cadence evidence.
+// Issuance is one Certificate Transparency issuance for cadence evidence. The
+// identity fields let cadence collapse the precertificate and the final
+// certificate of the same issuance, and the duplicate records that overlapping
+// domain queries return.
 type Issuance struct {
-	Names     []string
-	NotBefore time.Time
+	Names       []string
+	NotBefore   time.Time
+	Issuer      string
+	Fingerprint string
+	Serial      string
 }
 
 // Input is the raw material for one certificate classification. Every field is
@@ -245,8 +271,10 @@ func Classify(in Input) Classification {
 		if manager.ACMEServer != "" {
 			evidence = append(evidence, Evidence{Source: SourceCertManager, Fact: FactACMEserver, Value: manager.ACMEServer})
 		}
-		if manager.Duration != "" {
+		if strings.TrimSpace(manager.Duration) != "" {
 			evidence = append(evidence, Evidence{Source: SourceCertManager, Fact: FactDuration, Value: manager.Duration})
+		} else {
+			evidence = append(evidence, Evidence{Source: SourceCertManager, Fact: FactDurationSource, Value: "default"})
 		}
 		if manager.RenewBefore != "" {
 			evidence = append(evidence, Evidence{Source: SourceCertManager, Fact: FactRenewBefore, Value: manager.RenewBefore})
@@ -375,19 +403,29 @@ func healthOf(in Input, manager *Manager, hazardousIssuer bool, evidence *[]Evid
 }
 
 // cadence returns the Certificate Transparency cadence evidence for the
-// certificate's name set. It is evidence only, never a classification.
+// certificate's name set. It is evidence only, never a classification. Records
+// are first deduplicated by stable issuance identity, so a precertificate and
+// its final certificate, or the duplicate records that overlapping domain
+// queries return, count once. The 365-day window is a fixed 365*24h ending at
+// the evaluation instant, and a record issued after that instant is ignored.
 func cadence(in Input) []Evidence {
 	names := map[string]bool{}
 	for _, name := range in.Names {
 		names[normalizeName(name)] = true
 	}
+	seen := map[string]bool{}
 	instants := []time.Time{}
 	recent := 0
-	cutoff := in.Now.AddDate(-1, 0, 0)
+	cutoff := in.Now.Add(-365 * 24 * time.Hour)
 	for _, issuance := range in.CT {
-		if issuance.NotBefore.IsZero() || !intersects(issuance.Names, names) {
+		if issuance.NotBefore.IsZero() || issuance.NotBefore.After(in.Now) || !intersects(issuance.Names, names) {
 			continue
 		}
+		identity := issuanceIdentity(issuance)
+		if seen[identity] {
+			continue
+		}
+		seen[identity] = true
 		instants = append(instants, issuance.NotBefore)
 		if !issuance.NotBefore.Before(cutoff) {
 			recent++
@@ -405,16 +443,63 @@ func cadence(in Input) []Evidence {
 }
 
 // configRisks returns the findings that come from the certificate's own
-// configuration: a fixed renewBefore and a requested duration.
+// configuration: values cert-manager rejects, a fixed renewBefore that loops
+// against the issued lifetime, and a requested duration or renewBefore that
+// reaches a shorter lifetime. Renewal-specific CA/B decisions use the
+// evaluation instant, so a step that already took effect is never reported with
+// a stale date.
 func configRisks(in Input, manager *Manager) []Risk {
 	if manager == nil {
 		return nil
 	}
 	risks := []Risk{}
-	renewBefore, hasRenewBefore := parseDuration(manager.RenewBefore)
 	lifetime := in.NotAfter.Sub(in.NotBefore)
 
-	if hasRenewBefore && lifetime > 0 && renewBefore >= lifetime {
+	rawDuration := strings.TrimSpace(manager.Duration)
+	duration, durationErr := time.ParseDuration(rawDuration)
+	hasDuration := rawDuration != ""
+	switch {
+	case hasDuration && durationErr != nil:
+		risks = append(risks, invalidConfigRisk("spec.duration "+manager.Duration+" is not a valid duration"))
+	case hasDuration && duration < minimumDuration:
+		risks = append(risks, invalidConfigRisk("spec.duration "+manager.Duration+" is below cert-manager's 1h minimum"))
+	}
+
+	rawRenewBefore := strings.TrimSpace(manager.RenewBefore)
+	renewBefore, renewBeforeErr := time.ParseDuration(rawRenewBefore)
+	hasRenewBefore := rawRenewBefore != ""
+	switch {
+	case hasRenewBefore && renewBeforeErr != nil:
+		risks = append(risks, invalidConfigRisk("spec.renewBefore "+manager.RenewBefore+" is not a valid duration"))
+	case hasRenewBefore && renewBefore < minimumRenewBefore:
+		risks = append(risks, invalidConfigRisk("spec.renewBefore "+manager.RenewBefore+" is below cert-manager's 5m minimum"))
+	}
+
+	// spec.duration must be greater than spec.renewBefore; equal is rejected.
+	if hasDuration && durationErr == nil && hasRenewBefore && renewBeforeErr == nil && duration <= renewBefore {
+		risks = append(risks, invalidConfigRisk("spec.duration "+manager.Duration+" must be greater than spec.renewBefore "+manager.RenewBefore))
+	}
+
+	// spec.renewBeforePercentage is an integer percentage of the actual issued
+	// lifetime, between 1 and 99, whose result is the effective renewBefore.
+	rawPercentage := strings.TrimSpace(manager.RenewBeforePercentage)
+	percentage, percentageErr := strconv.Atoi(rawPercentage)
+	hasPercentage := rawPercentage != ""
+	switch {
+	case hasPercentage && (percentageErr != nil || percentage < 1 || percentage > 99):
+		risks = append(risks, invalidConfigRisk("spec.renewBeforePercentage "+manager.RenewBeforePercentage+" must be an integer percentage between 1 and 99"))
+	case hasPercentage && lifetime > 0:
+		effective := time.Duration(float64(lifetime) * float64(percentage) / 100)
+		if effective < minimumRenewBefore {
+			risks = append(risks, invalidConfigRisk("spec.renewBeforePercentage "+manager.RenewBeforePercentage+" yields an effective renewBefore of "+
+				effective.String()+", below cert-manager's 5m minimum"))
+		}
+	}
+
+	// A fixed renewBefore at or beyond the actual issued lifetime renews in a
+	// loop now. spec.renewBeforePercentage follows the issued lifetime, so it
+	// never triggers this check.
+	if hasRenewBefore && renewBeforeErr == nil && lifetime > 0 && renewBefore >= lifetime {
 		risks = append(risks, Risk{
 			Kind: KindRenewBeforeExceedsLifetime,
 			Detail: "spec.renewBefore " + manager.RenewBefore + " is not shorter than the issued lifetime " +
@@ -422,19 +507,22 @@ func configRisks(in Input, manager *Manager) []Risk {
 		})
 	}
 
-	if hasRenewBefore {
+	// A fixed renewBefore at or beyond the next shorter lifetime starts looping
+	// once that step takes effect.
+	if hasRenewBefore && renewBeforeErr == nil {
+		limitDays, limitEffective := renewalLimits(in.Now)
 		best := ""
 		detail := ""
-		if in.Policy.NextLimitEffective != "" && renewBefore >= time.Duration(in.Policy.NextLimitDays)*24*time.Hour {
-			best = in.Policy.NextLimitEffective
+		if limitEffective != "" && renewBefore >= time.Duration(limitDays)*24*time.Hour {
+			best = limitEffective
 			detail = "spec.renewBefore " + manager.RenewBefore + " reaches the next CA/B maximum validity of " +
-				strconv.Itoa(in.Policy.NextLimitDays) + " days"
+				strconv.Itoa(limitDays) + " days"
 		}
 		if effective, days, ok := letsEncryptNextStep(manager.ACMEServer, in.Now); ok && renewBefore >= time.Duration(days)*24*time.Hour {
 			if best == "" || effective < best {
 				best = effective
-				detail = "spec.renewBefore " + manager.RenewBefore + " reaches the next Let's Encrypt lifetime of " +
-					strconv.Itoa(days) + " days"
+				detail = "spec.renewBefore " + manager.RenewBefore + " reaches the next announced Let's Encrypt lifetime of " +
+					strconv.Itoa(days) + " days (announced, not confirmed)"
 			}
 		}
 		if best != "" {
@@ -446,15 +534,24 @@ func configRisks(in Input, manager *Manager) []Risk {
 		}
 	}
 
-	if duration, ok := parseDuration(manager.Duration); ok && manager.IssuerType == "acme" && in.Policy.NextLimitEffective != "" {
-		host := directoryHost(manager.ACMEServer)
-		if ca, known := publicACMECA[host]; known && duration > time.Duration(in.Policy.NextLimitDays)*24*time.Hour {
-			risks = append(risks, Risk{
-				Kind: KindDurationExceedsNextLimit,
-				Detail: "spec.duration " + manager.Duration + " exceeds the next CA/B maximum validity of " +
-					strconv.Itoa(in.Policy.NextLimitDays) + " days for public ACME CA " + ca + "; the CA will issue a shorter lifetime.",
-				Effective: in.Policy.NextLimitEffective,
-			})
+	// The requested duration is compared with the CA/B maximum validity that
+	// governs the next issuance. When spec.duration is absent, cert-manager's
+	// documented 90-day default applies.
+	if manager.IssuerType == "acme" {
+		if ca, known := publicACMECA[directoryHost(manager.ACMEServer)]; known {
+			effectiveDuration := defaultDuration
+			if hasDuration && durationErr == nil {
+				effectiveDuration = duration
+			}
+			limitDays, limitEffective := renewalLimits(in.Now)
+			if effectiveDuration > time.Duration(limitDays)*24*time.Hour {
+				risks = append(risks, Risk{
+					Kind: KindDurationExceedsNextLimit,
+					Detail: "spec.duration " + durationLabel(manager.Duration) + " exceeds " + caLimitPhrase(limitDays, limitEffective) +
+						" for public ACME CA " + ca + "; the CA will issue a shorter lifetime.",
+					Effective: limitEffective,
+				})
+			}
 		}
 	}
 	return risks
@@ -463,18 +560,22 @@ func configRisks(in Input, manager *Manager) []Risk {
 // manualRenewalRisk reports a manual certificate whose next renewal falls after
 // the next CA/B step, when the manual workload grows.
 func manualRenewalRisk(in Input) []Risk {
-	if in.Policy.NextLimitEffective == "" || in.NotAfter.IsZero() {
+	if in.NotAfter.IsZero() {
 		return nil
 	}
-	effective, err := parseTime(in.Policy.NextLimitEffective)
+	limitDays, limitEffective := renewalLimits(in.Now)
+	if limitEffective == "" {
+		return nil
+	}
+	effective, err := parseTime(limitEffective)
 	if err != nil || !in.NotAfter.After(effective) {
 		return nil
 	}
 	return []Risk{{
 		Kind: KindManualRenewalAfterLimit,
 		Detail: "manual renewal is due " + in.NotAfter.UTC().Format(time.RFC3339) + ", after the next CA/B maximum validity of " +
-			strconv.Itoa(in.Policy.NextLimitDays) + " days (effective " + in.Policy.NextLimitEffective + "); manual renewal workload grows.",
-		Effective: in.Policy.NextLimitEffective,
+			strconv.Itoa(limitDays) + " days (effective " + limitEffective + "); manual renewal workload grows.",
+		Effective: limitEffective,
 	}}
 }
 
@@ -525,17 +626,58 @@ func medianIntervalDays(instants []time.Time) (int, bool) {
 	return int(math.Round(median)), true
 }
 
-// parseDuration parses a cert-manager spec duration such as "2160h0m0s".
-func parseDuration(value string) (time.Duration, bool) {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return 0, false
+// invalidConfigRisk is a value cert-manager's own validation rejects, so the
+// Certificate could not be applied as written.
+func invalidConfigRisk(detail string) Risk {
+	return Risk{Kind: KindRenewalConfigInvalid, Detail: detail + "; cert-manager rejects this certificate"}
+}
+
+// renewalLimits returns the CA/B maximum validity that governs the next
+// issuance: the next scheduled step strictly after now, so a step that already
+// took effect is never reported with a stale date, or the step in force at now
+// when no further step remains.
+func renewalLimits(now time.Time) (int, string) {
+	if effective, limits, ok := policy.NextStepAfter(now); ok {
+		return limits.MaxValidityDays, effective.UTC().Format(time.RFC3339)
 	}
-	parsed, err := time.ParseDuration(trimmed)
-	if err != nil || parsed <= 0 {
-		return 0, false
+	return policy.MaxValidityAt(now), ""
+}
+
+// caLimitPhrase names a CA/B limit, saying whether it is the next scheduled step
+// or the one already in force.
+func caLimitPhrase(days int, effective string) string {
+	if effective != "" {
+		return "the next CA/B maximum validity of " + strconv.Itoa(days) + " days (effective " + effective + ")"
 	}
-	return parsed, true
+	return "the current CA/B maximum validity of " + strconv.Itoa(days) + " days"
+}
+
+// durationLabel names the duration a risk is about, naming the documented
+// default when spec.duration is absent.
+func durationLabel(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unset (cert-manager default 90 days)"
+	}
+	return value
+}
+
+// issuanceIdentity is the stable identity of one issuance. A precertificate and
+// its final certificate share the issuer and serial, so serial (with issuer)
+// wins; a record with no serial falls back to its fingerprint, then to its name
+// set and notBefore.
+func issuanceIdentity(issuance Issuance) string {
+	if serial := strings.ToLower(strings.TrimSpace(issuance.Serial)); serial != "" {
+		return "serial:" + normalizeName(issuance.Issuer) + "|" + serial
+	}
+	if fingerprint := strings.ToLower(strings.TrimSpace(issuance.Fingerprint)); fingerprint != "" {
+		return "fp:" + fingerprint
+	}
+	names := make([]string, 0, len(issuance.Names))
+	for _, name := range issuance.Names {
+		names = append(names, normalizeName(name))
+	}
+	sort.Strings(names)
+	return "names:" + strings.Join(names, ",") + "|" + issuance.NotBefore.UTC().Format(time.RFC3339)
 }
 
 // parseTime parses an RFC 3339 timestamp as written in a Kubernetes status.

@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -83,9 +85,33 @@ func TestParseFailOn(t *testing.T) {
 	if _, err := ParseFailOn("none,live_only"); !errors.Is(err, ErrFailOnNoneCombined) {
 		t.Fatalf("err = %v", err)
 	}
+	for _, value := range []string{"", "   ", ",", " , , "} {
+		if _, err := ParseFailOn(value); !errors.Is(err, ErrEmptyFailOnList) {
+			t.Fatalf("ParseFailOn(%q) err = %v, want ErrEmptyFailOnList", value, err)
+		}
+	}
 	none, err := ParseFailOn("none")
 	if err != nil || len(none) != 1 || none[0] != FailOnNone {
 		t.Fatalf("none = %v err = %v", none, err)
+	}
+}
+
+func TestLoadResolvesRelativePathsFromConfigDirectory(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "scadenza.yaml")
+	document := "version: 1\nhostsFile: hosts.txt\nkube:\n  enabled: true\n  ownershipFile: owners.yaml\n"
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.HostsFile != filepath.Join(directory, "hosts.txt") {
+		t.Fatalf("hostsFile = %q", config.HostsFile)
+	}
+	if config.Kube.OwnershipFile != filepath.Join(directory, "owners.yaml") {
+		t.Fatalf("ownershipFile = %q", config.Kube.OwnershipFile)
 	}
 }
 
