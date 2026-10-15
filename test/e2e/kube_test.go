@@ -29,6 +29,7 @@ import (
 
 const (
 	kubeContextEnv        = "SCADENZA_E2E_KUBE_CONTEXT"
+	secretsKubeconfigEnv  = "SCADENZA_E2E_SECRETS_KUBECONFIG"
 	secretsKubeContextEnv = "SCADENZA_E2E_SECRETS_KUBE_CONTEXT"
 	namespaceEnv          = "SCADENZA_E2E_NAMESPACE"
 	ownerValue            = "team-e2e"
@@ -183,6 +184,10 @@ func TestScanKubernetesSource(t *testing.T) {
 }
 
 func TestScanKubernetesSecretDataOptIn(t *testing.T) {
+	kubeconfig := os.Getenv(secretsKubeconfigEnv)
+	if kubeconfig == "" {
+		t.Skipf("%s is not set; skipping the Secret-data cluster e2e", secretsKubeconfigEnv)
+	}
 	kubeContext := os.Getenv(secretsKubeContextEnv)
 	if kubeContext == "" {
 		t.Skipf("%s is not set; skipping the Secret-data cluster e2e", secretsKubeContextEnv)
@@ -192,7 +197,7 @@ func TestScanKubernetesSecretDataOptIn(t *testing.T) {
 		namespace = "scadenza-e2e"
 	}
 
-	output, scanErrors := scan(t, kubeContext, "--kube-secrets")
+	output, scanErrors := scan(t, kubeContext, "--kubeconfig", kubeconfig, "--kube-secrets")
 	assertNoSecretData(t, output, scanErrors)
 	var document scanDocument
 	if err := json.Unmarshal(output, &document); err != nil {
