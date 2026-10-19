@@ -29,6 +29,7 @@ import (
 
 const (
 	kubeContextEnv        = "SCADENZA_E2E_KUBE_CONTEXT"
+	secretsKubeconfigEnv  = "SCADENZA_E2E_SECRETS_KUBECONFIG"
 	secretsKubeContextEnv = "SCADENZA_E2E_SECRETS_KUBE_CONTEXT"
 	namespaceEnv          = "SCADENZA_E2E_NAMESPACE"
 	ownerValue            = "team-e2e"
@@ -183,6 +184,10 @@ func TestScanKubernetesSource(t *testing.T) {
 }
 
 func TestScanKubernetesSecretDataOptIn(t *testing.T) {
+	kubeconfig := os.Getenv(secretsKubeconfigEnv)
+	if kubeconfig == "" {
+		t.Skipf("%s is not set; skipping the Secret-data cluster e2e", secretsKubeconfigEnv)
+	}
 	kubeContext := os.Getenv(secretsKubeContextEnv)
 	if kubeContext == "" {
 		t.Skipf("%s is not set; skipping the Secret-data cluster e2e", secretsKubeContextEnv)
@@ -192,7 +197,7 @@ func TestScanKubernetesSecretDataOptIn(t *testing.T) {
 		namespace = "scadenza-e2e"
 	}
 
-	output, scanErrors := scan(t, kubeContext, "--kube-secrets")
+	output, scanErrors := scan(t, kubeContext, "--kubeconfig", kubeconfig, "--kube-secrets")
 	assertNoSecretData(t, output, scanErrors)
 	var document scanDocument
 	if err := json.Unmarshal(output, &document); err != nil {
@@ -236,13 +241,49 @@ func TestScanKubernetesSecretDataOptIn(t *testing.T) {
 	}
 }
 
+// secretDataReason reports why data looks like Secret key material, or "" when
+// it is safe. Markers are matched case-sensitively on the original bytes so
+// diagnostic prose (e.g. the SCD-0029 explanation) is never flagged.
+func secretDataReason(data []byte) string {
+	if bytes.Contains(data, []byte("tls.key")) {
+		return "tls.key"
+	}
+	if bytes.Contains(data, []byte("-----BEGIN")) && strings.Contains(string(data), "PRIVATE KEY") {
+		return "PEM private key block"
+	}
+	if bytes.Contains(data, []byte("LS0tLS1CRUdJTi")) {
+		return "base64-encoded PEM private key block"
+	}
+	return ""
+}
+
 func assertNoSecretData(t *testing.T, output, scanErrors []byte) {
 	t.Helper()
-	for name, stream := range map[string]string{"stdout": string(output), "stderr": string(scanErrors)} {
-		lower := strings.ToLower(stream)
-		if strings.Contains(lower, "tls.key") || strings.Contains(lower, "private key") {
-			t.Fatalf("%s contains Secret key material: %s", name, stream)
+	for name, stream := range map[string][]byte{"stdout": output, "stderr": scanErrors} {
+		if reason := secretDataReason(stream); reason != "" {
+			t.Fatalf("%s contains Secret key material (%s): %s", name, reason, stream)
 		}
+	}
+}
+
+func TestSecretDataReason(t *testing.T) {
+	scd0029Explanation := []byte(`diagnostic SCD-0029: Secret "private keys are dropped immediately and are never "retained`)
+	if reason := secretDataReason(scd0029Explanation); reason != "" {
+		t.Errorf("SCD-0029 explanation flagged as key material: %s", reason)
+	}
+	pemBlock := []byte("-----BEGIN RSA PRIVATE KEY-----\nabcdefgh\n-----END RSA PRIVATE KEY-----\n")
+	if reason := secretDataReason(pemBlock); reason == "" {
+		t.Error("PEM private key block not detected")
+	}
+	base64PEM := []byte(`{"data":{"tls.key":"LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQo="}}`)
+	if reason := secretDataReason(base64PEM); reason == "" {
+		t.Error("base64-encoded PEM private key not detected")
+	}
+	if reason := secretDataReason([]byte(`{"tls.key":"K12lZQ=="}`)); reason == "" {
+		t.Error("tls.key data field not detected")
+	}
+	if reason := secretDataReason([]byte("-----BEGIN CERTIFICATE-----\nabcdefgh\n-----END CERTIFICATE-----\n")); reason != "" {
+		t.Errorf("public certificate flagged as key material: %s", reason)
 	}
 }
 
