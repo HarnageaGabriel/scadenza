@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HarnageaGabriel/scadenza/internal/azurekv"
 	"github.com/HarnageaGabriel/scadenza/internal/clock"
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
 	"github.com/HarnageaGabriel/scadenza/internal/diag"
@@ -20,16 +21,18 @@ import (
 )
 
 type ctDependencies struct {
-	clock    clock.Clock
-	sources  map[string]ct.Source
-	prober   hostProber
-	loadKube kubeLoader
+	clock     clock.Clock
+	sources   map[string]ct.Source
+	prober    hostProber
+	loadKube  kubeLoader
+	loadAzure azureLoader
 }
 
 // kubeLoader builds a read-only Kubernetes source from CLI options. It is
 // injectable so tests can run without a cluster.
 type (
 	kubeLoader   func(load kube.LoadOptions, scan kube.Options) (kube.Source, error)
+	azureLoader  func(load azurekv.LoadOptions) (azurekv.Source, error)
 	commandError struct {
 		code int
 		err  error
@@ -60,7 +63,7 @@ func productionCTDependencies() ctDependencies {
 	return ctDependencies{clock: clock.System{}, sources: map[string]ct.Source{
 		"certspotter": &ct.CertSpotter{Client: certClient, URL: "https://api.certspotter.com/v1/issuances", APIKey: os.Getenv("SCADENZA_CERTSPOTTER_KEY")},
 		"crtsh":       &ct.CrtSH{Client: crtClient, URL: "https://crt.sh/"},
-	}, prober: tlsprobe.New(), loadKube: kube.Load}
+	}, prober: tlsprobe.New(), loadKube: kube.Load, loadAzure: azurekv.Load}
 }
 
 func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.Command {

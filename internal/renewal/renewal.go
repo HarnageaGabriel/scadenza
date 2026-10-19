@@ -58,6 +58,8 @@ const (
 	SourceKubeSecret = "kube-secret"
 	// SourceConfig marks an explicit declaration in scadenza.yaml.
 	SourceConfig = "config"
+	// SourceKeyVault marks a fact read from an Azure Key Vault certificate policy.
+	SourceKeyVault = "keyvault"
 )
 
 // Stable evidence fact keys.
@@ -77,6 +79,11 @@ const (
 	FactRenewalOverdue       = "renewal-overdue"
 	FactNotAfterPassed       = "not-after-passed"
 	FactHealthCapped         = "health-capped-by-issuer-type"
+	FactKeyVaultIssuer       = "issuer"
+	FactKeyVaultValidity     = "policy-validity-months"
+	FactKeyVaultAutoRenew    = "auto-renew"
+	FactKeyVaultEmail        = "email-contacts"
+	FactKeyVaultNoActions    = "no-lifetime-actions"
 	FactDurationSource       = "duration-source"
 )
 
@@ -98,7 +105,9 @@ const (
 	KindManualRenewalAfterLimit = "manual-renewal-after-limit"
 	// KindRenewalConfigInvalid reports a spec.duration, spec.renewBefore, or
 	// spec.renewBeforePercentage value that cert-manager itself rejects.
-	KindRenewalConfigInvalid = "renewal-config-invalid"
+	KindRenewalConfigInvalid                = "renewal-config-invalid"
+	KindKeyVaultValidityExceedsNextLimit    = "keyvault-validity-exceeds-next-limit"
+	KindKeyVaultRenewTriggerExceedsLifetime = "keyvault-renew-trigger-exceeds-lifetime"
 )
 
 // cert-manager's own validity constraints on a Certificate spec. A value that
@@ -114,6 +123,10 @@ const (
 	// defaultDuration is the documented cert-manager default applied when
 	// spec.duration is absent: 90 days.
 	defaultDuration = 90 * 24 * time.Hour
+	// Key Vault expresses validity in calendar months. Use the conservative
+	// bound appropriate to each comparison instead of an average month length.
+	keyVaultValidityUpperDaysPerMonth = 31
+	keyVaultLifetimeLowerDaysPerMonth = 28
 )
 
 // OverlappedRenewalFraction is the fraction of a lifetime that cert-manager
@@ -165,6 +178,7 @@ type Evidence struct {
 	Source string `json:"source"`
 	Fact   string `json:"fact"`
 	Value  string `json:"value"`
+	Vault  string `json:"vault,omitempty"`
 }
 
 // Risk is one configuration that will break under shorter lifetimes.
@@ -203,6 +217,21 @@ type Secret struct {
 	CertificateName string
 }
 
+// LifetimeAction is a Key Vault policy lifetime action.
+type LifetimeAction struct {
+	Type               string
+	DaysBeforeExpiry   *int
+	LifetimePercentage *int
+}
+
+// KeyVault is the certificate policy evidence read from Azure Key Vault.
+type KeyVault struct {
+	Vault           string
+	Issuer          string
+	ValidityMonths  *int
+	LifetimeActions []LifetimeAction
+}
+
 // Issuance is one Certificate Transparency issuance for cadence evidence. The
 // identity fields let cadence collapse the precertificate and the final
 // certificate of the same issuance, and the duplicate records that overlapping
@@ -228,6 +257,11 @@ type Input struct {
 
 	// Manager is the cert-manager Certificate, when one was read.
 	Manager *Manager
+	// KeyVault is the Azure Key Vault certificate policy, when one was read.
+	KeyVault *KeyVault
+	// KeyVaults contains every correlated Key Vault policy observation. When
+	// empty, KeyVault remains the backwards-compatible single-policy input.
+	KeyVaults []KeyVault
 	// Secrets are the kubernetes.io/tls Secret observations.
 	Secrets []Secret
 	// CT is every Certificate Transparency issuance already fetched.
@@ -251,6 +285,52 @@ func Classify(in Input) Classification {
 
 	if in.DeclaredMode != "" {
 		evidence = append(evidence, Evidence{Source: SourceConfig, Fact: FactRenewalModeDeclared, Value: string(in.DeclaredMode)})
+	}
+
+	// Key Vault policy facts are direct evidence. AutoRenew with an integrated
+	// public issuer or Self is automatic; actions without AutoRenew are manual
+	// evidence.
+	// https://learn.microsoft.com/en-us/azure/key-vault/certificates/tutorial-rotate-certificates
+	// https://learn.microsoft.com/en-us/azure/key-vault/certificates/how-to-integrate-certificate-authority
+	keyVaultAutomatic := false
+	keyVaultManual := false
+	for _, keyVault := range keyVaultPolicies(in) {
+		issuer := keyVault.Issuer
+		if issuer == "" {
+			issuer = "Unknown"
+		}
+		evidence = append(evidence, Evidence{Source: SourceKeyVault, Fact: FactKeyVaultIssuer, Value: issuer, Vault: keyVault.Vault})
+		if keyVault.ValidityMonths != nil {
+			evidence = append(evidence, Evidence{
+				Source: SourceKeyVault,
+				Fact:   FactKeyVaultValidity,
+				Value:  strconv.Itoa(*keyVault.ValidityMonths),
+				Vault:  keyVault.Vault,
+			})
+		}
+		observationAutoRenew := false
+		if len(keyVault.LifetimeActions) == 0 {
+			evidence = append(evidence, Evidence{Source: SourceKeyVault, Fact: FactKeyVaultNoActions, Value: "true", Vault: keyVault.Vault})
+		}
+		for _, action := range keyVault.LifetimeActions {
+			switch normalizeKeyVaultAction(action.Type) {
+			case "autorenew":
+				observationAutoRenew = true
+				evidence = append(evidence, Evidence{Source: SourceKeyVault, Fact: FactKeyVaultAutoRenew, Value: action.Type, Vault: keyVault.Vault})
+			case "emailcontacts":
+				evidence = append(evidence, Evidence{Source: SourceKeyVault, Fact: FactKeyVaultEmail, Value: action.Type, Vault: keyVault.Vault})
+			}
+		}
+		if observationAutoRenew && isAutomaticKeyVaultIssuer(issuer) {
+			keyVaultAutomatic = true
+		} else if !observationAutoRenew && len(keyVault.LifetimeActions) > 0 {
+			keyVaultManual = true
+		}
+	}
+	if keyVaultAutomatic {
+		mode = ModeAutomatic
+	} else if keyVaultManual {
+		mode = ModeManual
 	}
 
 	// A Certificate resource is the renewal mechanism itself: cert-manager owns
@@ -311,7 +391,7 @@ func Classify(in Input) Classification {
 
 	// No managing controller was found. CT or TLS alone is never manual: it is
 	// unknown, with the fact that proves why.
-	if mode == ModeUnknown {
+	if mode == ModeUnknown && len(keyVaultPolicies(in)) == 0 {
 		source := SourceTLS
 		switch {
 		case len(in.Secrets) > 0:
@@ -322,10 +402,11 @@ func Classify(in Input) Classification {
 		evidence = append(evidence, Evidence{Source: source, Fact: FactNoManagingController, Value: "true"})
 	}
 
-	health, degradedReason := healthOf(in, manager, hazardousIssuer, &evidence)
+	health, degradedReason := healthOf(in, manager, hazardousIssuer, keyVaultAutomatic, &evidence)
 
 	evidence = append(evidence, cadence(in)...)
 	risks = append(risks, configRisks(in, manager)...)
+	risks = append(risks, keyVaultRisks(in)...)
 	if health == HealthDegraded {
 		risks = append(risks, Risk{Kind: KindRenewalDegraded, Detail: degradedReason})
 	}
@@ -343,8 +424,13 @@ func Classify(in Input) Classification {
 
 // healthOf derives the renewal health, and returns the reason for a degraded
 // verdict so the risk detail can repeat it.
-func healthOf(in Input, manager *Manager, hazardousIssuer bool, evidence *[]Evidence) (Health, string) {
+func healthOf(in Input, manager *Manager, hazardousIssuer, keyVaultAutomatic bool, evidence *[]Evidence) (Health, string) {
 	if manager == nil {
+		// Key Vault AutoRenew is configured, but the policy has no operational
+		// health signal beyond the configuration itself.
+		if keyVaultAutomatic {
+			return HealthConfigured, ""
+		}
 		// Without a Certificate there is no operational signal: an annotated
 		// Secret is configured, everything else is unknown.
 		for _, secret := range in.Secrets {
@@ -557,6 +643,100 @@ func configRisks(in Input, manager *Manager) []Risk {
 	return risks
 }
 
+// keyVaultRisks reports Key Vault policy configurations that will break under
+// shorter public certificate lifetimes.
+func keyVaultRisks(in Input) []Risk {
+	policies := keyVaultPolicies(in)
+	if len(policies) == 0 {
+		return nil
+	}
+	risks := []Risk{}
+	seen := map[Risk]bool{}
+	limitDays, limitEffective := renewalLimits(in.Now)
+	for index := range policies {
+		keyVault := &policies[index]
+		if keyVault.ValidityMonths != nil {
+			validityDays := *keyVault.ValidityMonths * keyVaultValidityUpperDaysPerMonth
+			if validityDays > limitDays {
+				risk := Risk{
+					Kind: KindKeyVaultValidityExceedsNextLimit,
+					Detail: "certificate policy validity " + strconv.Itoa(*keyVault.ValidityMonths) +
+						" months (conservative upper bound " + strconv.Itoa(validityDays) + " days) exceeds " + caLimitPhrase(limitDays, limitEffective) + ".",
+					Effective: limitEffective,
+				}
+				if !seen[risk] {
+					risks = append(risks, risk)
+					seen[risk] = true
+				}
+			}
+		}
+		if keyVaultAutoRenew(keyVault) && keyVault.ValidityMonths != nil {
+			lifetimeDays := *keyVault.ValidityMonths * keyVaultLifetimeLowerDaysPerMonth
+			for _, action := range keyVault.LifetimeActions {
+				if !strings.EqualFold(strings.ReplaceAll(action.Type, "_", ""), "AutoRenew") {
+					continue
+				}
+				if action.DaysBeforeExpiry != nil && *action.DaysBeforeExpiry >= lifetimeDays {
+					risk := Risk{
+						Kind:   KindKeyVaultRenewTriggerExceedsLifetime,
+						Detail: "AutoRenew triggers " + strconv.Itoa(*action.DaysBeforeExpiry) + " days before expiry, at or beyond the conservative " + strconv.Itoa(lifetimeDays) + "-day lower bound for the policy lifetime.",
+					}
+					if !seen[risk] {
+						risks = append(risks, risk)
+						seen[risk] = true
+					}
+				}
+				if action.LifetimePercentage != nil && *action.LifetimePercentage >= 100 {
+					risk := Risk{
+						Kind:   KindKeyVaultRenewTriggerExceedsLifetime,
+						Detail: "AutoRenew triggers at " + strconv.Itoa(*action.LifetimePercentage) + "% of lifetime, at or beyond the certificate lifetime.",
+					}
+					if !seen[risk] {
+						risks = append(risks, risk)
+						seen[risk] = true
+					}
+				}
+			}
+		}
+	}
+	return risks
+}
+
+func keyVaultPolicies(in Input) []KeyVault {
+	if len(in.KeyVaults) > 0 {
+		return in.KeyVaults
+	}
+	if in.KeyVault != nil {
+		return []KeyVault{*in.KeyVault}
+	}
+	return nil
+}
+
+func keyVaultAutoRenew(policy *KeyVault) bool {
+	if policy == nil {
+		return false
+	}
+	for _, action := range policy.LifetimeActions {
+		if normalizeKeyVaultAction(action.Type) == "autorenew" {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeKeyVaultAction(value string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", ""))
+}
+
+func isIntegratedIssuer(value string) bool {
+	issuer := strings.ToLower(strings.TrimSpace(value))
+	return issuer != "" && issuer != "self" && issuer != "unknown"
+}
+
+func isAutomaticKeyVaultIssuer(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "self") || isIntegratedIssuer(value)
+}
+
 // manualRenewalRisk reports a manual certificate whose next renewal falls after
 // the next CA/B step, when the manual workload grows.
 func manualRenewalRisk(in Input) []Risk {
@@ -706,6 +886,9 @@ func sortEvidence(items []Evidence) []Evidence {
 		}
 		if result[i].Fact != result[j].Fact {
 			return result[i].Fact < result[j].Fact
+		}
+		if result[i].Vault != result[j].Vault {
+			return result[i].Vault < result[j].Vault
 		}
 		return result[i].Value < result[j].Value
 	})

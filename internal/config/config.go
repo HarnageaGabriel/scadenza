@@ -35,6 +35,8 @@ var FailOnKinds = []string{
 	"duration-exceeds-next-limit",
 	"manual-renewal-after-limit",
 	"renewal-config-invalid",
+	"keyvault-validity-exceeds-next-limit",
+	"keyvault-renew-trigger-exceeds-lifetime",
 	FailOnNone,
 }
 
@@ -78,6 +80,7 @@ type Config struct {
 	FromCT    *bool
 	Port      *int
 	Kube      Kube
+	Azure     Azure
 	Policy    Policy
 	// Renewal maps a domain to a declared renewal mode (only "manual"). It is
 	// evidence for renewal classification: an automatic mechanism still wins.
@@ -91,6 +94,11 @@ type Kube struct {
 	Context       string
 	Namespaces    []string
 	OwnershipFile string
+}
+
+// Azure configures read-only Azure Key Vault sources.
+type Azure struct {
+	KeyVaults []string
 }
 
 // Policy configures the failure policy.
@@ -108,6 +116,7 @@ type document struct {
 	FromCT    *bool             `yaml:"fromCT"`
 	Port      *int              `yaml:"port"`
 	Kube      *kubeDoc          `yaml:"kube"`
+	Azure     *azureDoc         `yaml:"azure"`
 	Policy    *policyDoc        `yaml:"policy"`
 	Renewal   map[string]string `yaml:"renewal"`
 }
@@ -118,6 +127,10 @@ type kubeDoc struct {
 	Context       string   `yaml:"context"`
 	Namespaces    []string `yaml:"namespaces"`
 	OwnershipFile string   `yaml:"ownershipFile"`
+}
+
+type azureDoc struct {
+	KeyVaults []string `yaml:"keyVaults"`
 }
 
 type policyDoc struct {
@@ -177,6 +190,9 @@ func Parse(data []byte) (Config, error) {
 			Namespaces:    decoded.Kube.Namespaces,
 			OwnershipFile: decoded.Kube.OwnershipFile,
 		}
+	}
+	if decoded.Azure != nil {
+		config.Azure.KeyVaults = append([]string(nil), decoded.Azure.KeyVaults...)
 	}
 	if decoded.Policy != nil {
 		config.Policy.Strict = decoded.Policy.Strict

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HarnageaGabriel/scadenza/internal/azurekv"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
 )
 
@@ -83,6 +84,24 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 			var stdout bytes.Buffer
 			if code := execute([]string{"scan", "--kube", "--kube-secrets", "--format", "json"}, &stdout, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
 				t.Fatalf("kube scan exit = %d", code)
+			}
+			return stdout.Bytes()
+		}},
+		{"scan azure empty version and action type", "scan-v1.schema.json", func(t *testing.T) []byte {
+			notBefore := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			notAfter := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+			stub := azureSourceStub{certificates: []azurekv.Certificate{{
+				Fingerprint: strings.Repeat("f", 64), Names: []string{"vault.example"}, NotBefore: notBefore, NotAfter: notAfter,
+				Facts: azurekv.Facts{
+					Name: "versionless", Vault: "demo.vault.azure.net", Version: "", NotBefore: notBefore,
+					NotAfter: notAfter, Issuer: "Unknown", LifetimeActions: []azurekv.LifetimeAction{{Type: ""}}, Tags: map[string]string{},
+				},
+			}}}
+			dependencies := scanDependencies("http://127.0.0.1:1", fakeProber{})
+			dependencies.loadAzure = func(azurekv.LoadOptions) (azurekv.Source, error) { return stub, nil }
+			var stdout, stderr bytes.Buffer
+			if code := execute([]string{"scan", "--azure-keyvault", "https://demo.vault.azure.net", "--format", "json"}, &stdout, &stderr, dependencies); code != ExitOK {
+				t.Fatalf("azure scan exit = %d; stderr=%s", code, stderr.String())
 			}
 			return stdout.Bytes()
 		}},
