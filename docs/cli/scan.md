@@ -13,6 +13,7 @@ scadenza scan --from-ct=false --hosts-file hosts.txt
 scadenza scan --domain example.com --strict --min-coverage 90 --fail-on live_only
 scadenza scan --kube --group-by owner
 scadenza scan --config scadenza.yaml
+scadenza scan --azure-keyvault https://prod.vault.azure.net
 scadenza scan --domain example.com --now 2027-04-01T00:00:00Z --format json
 ```
 
@@ -51,7 +52,9 @@ derived names are listed in `unresolved` with reason `host-cap` and reported as
   `ct_only`, `live_only`, `exceeds-100d`, `not-compliant-at-issuance`,
   `renew-before-exceeds-lifetime`, `renewal-degraded`,
   `renew-before-loop-at-next-limit`, `duration-exceeds-next-limit`,
-  `manual-renewal-after-limit`, `renewal-config-invalid`, or `none` alone.
+  `manual-renewal-after-limit`, `renewal-config-invalid`,
+  `keyvault-validity-exceeds-next-limit`,
+  `keyvault-renew-trigger-exceeds-lifetime`, or `none` alone.
   Default
   `live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded`.
 - `--group-by owner|names|none` (default `none`) groups the table rows by the
@@ -69,6 +72,9 @@ derived names are listed in `unresolved` with reason `host-cap` and reported as
 - `--kube-context name`, `--kubeconfig path`, `--namespace ns` (repeatable,
   default all namespaces), `--ownership-file path`, `--kube-qps 5` configure the
   Kubernetes source. They require `--kube`.
+- `--azure-keyvault URI` adds a read-only Azure Key Vault certificate source
+  (repeatable); `--azure-qps` controls its rate (default 5). See
+  [Azure Key Vault](../azure.md).
 
 ## Kubernetes source
 
@@ -285,4 +291,3 @@ within `scadenza.scan/v1` under the rules of
 [ADR 0007](../adr/0007-json-compatibility.md). It also carries the M3 additions:
 `owners`, the per-observation `kubernetes` object, and the Kubernetes
 `sources_used`, `verdict_100d`, findings kind, and observation source values.
-

@@ -9,7 +9,7 @@
     "schema_version": {"const": "scadenza.scan/v1"},
     "generated_at": {"type": "string", "format": "date-time"},
     "domains": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "sources_used": {"type": "array", "items": {"enum": ["certspotter", "crtsh", "tls", "kube"]}},
+    "sources_used": {"type": "array", "items": {"enum": ["certspotter", "crtsh", "tls", "kube", "azure-keyvault"]}},
     "certificates": {
       "type": "array",
       "items": {
@@ -47,7 +47,7 @@
               "required": ["owner", "owner_source", "location"],
               "properties": {
                 "owner": {"type": "string", "minLength": 1},
-                "owner_source": {"enum": ["label", "annotation", "namespace-label", "namespace-annotation", "mapping-file"]},
+                "owner_source": {"enum": ["label", "annotation", "namespace-label", "namespace-annotation", "mapping-file", "tag"]},
                 "location": {"type": "string", "minLength": 1}
               }
             }
@@ -66,7 +66,7 @@
                   "additionalProperties": false,
                   "required": ["source", "fact", "value"],
                   "properties": {
-                    "source": {"enum": ["cert-manager", "ct", "tls", "kube-secret", "config"]},
+                    "source": {"enum": ["cert-manager", "ct", "tls", "kube-secret", "config", "keyvault"]},
                     "fact": {"type": "string", "minLength": 1},
                     "value": {"type": "string"}
                   }
@@ -79,7 +79,7 @@
                   "additionalProperties": false,
                   "required": ["kind", "detail"],
                   "properties": {
-                    "kind": {"enum": ["renew-before-exceeds-lifetime", "renew-before-loop-at-next-limit", "duration-exceeds-next-limit", "renewal-degraded", "manual-renewal-after-limit", "renewal-config-invalid"]},
+                    "kind": {"enum": ["renew-before-exceeds-lifetime", "renew-before-loop-at-next-limit", "duration-exceeds-next-limit", "renewal-degraded", "manual-renewal-after-limit", "renewal-config-invalid", "keyvault-validity-exceeds-next-limit", "keyvault-renew-trigger-exceeds-lifetime"]},
                     "detail": {"type": "string", "minLength": 1},
                     "effective": {"type": "string"}
                   }
@@ -120,6 +120,24 @@
                     "ready_reason": {"type": "string"},
                     "certificate_name": {"type": "string"}
                   }
+                },
+                "azure_keyvault": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name", "vault", "version", "not_before", "not_after", "issuer", "lifetime_actions", "tags"],
+                  "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "vault": {"type": "string", "minLength": 1},
+                    "version": {"type": "string", "minLength": 1},
+                    "enabled": {"type": "boolean"},
+                    "not_before": {"type": "string", "format": "date-time"},
+                    "not_after": {"type": "string", "format": "date-time"},
+                    "issuer": {"type": "string", "minLength": 1},
+                    "policy_validity_months": {"type": "integer", "minimum": 1},
+                    "lifetime_actions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"enum": ["AutoRenew", "EmailContacts"]}, "days_before_expiry": {"type": "integer", "minimum": 0}, "lifetime_percentage": {"type": "integer", "minimum": 0}}}},
+                    "tags": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "content_type": {"type": "string"}
+                  }
                 }
               }
             }
@@ -134,7 +152,7 @@
         "additionalProperties": false,
         "required": ["kind", "fingerprint", "names", "detail"],
         "properties": {
-          "kind": {"enum": ["matched", "ct_only", "live_only", "kube_only", "not_checked", "unknown", "exceeds-100d", "not-compliant-at-issuance", "renew-before-exceeds-lifetime", "renew-before-loop-at-next-limit", "duration-exceeds-next-limit", "renewal-degraded", "manual-renewal-after-limit", "renewal-config-invalid"]},
+          "kind": {"enum": ["matched", "ct_only", "live_only", "kube_only", "not_checked", "unknown", "exceeds-100d", "not-compliant-at-issuance", "renew-before-exceeds-lifetime", "renew-before-loop-at-next-limit", "duration-exceeds-next-limit", "renewal-degraded", "manual-renewal-after-limit", "renewal-config-invalid", "keyvault-validity-exceeds-next-limit", "keyvault-renew-trigger-exceeds-lifetime"]},
           "fingerprint": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
           "names": {"type": "array", "items": {"type": "string"}},
           "detail": {"type": "string", "minLength": 1}
@@ -176,7 +194,7 @@
         "required": ["owner", "owner_source", "certificates", "automatic", "manual", "unknown", "degraded", "manual_renewals_per_year"],
         "properties": {
           "owner": {"type": "string", "minLength": 1},
-          "owner_source": {"enum": ["", "label", "annotation", "namespace-label", "namespace-annotation", "mapping-file"]},
+          "owner_source": {"enum": ["", "label", "annotation", "namespace-label", "namespace-annotation", "mapping-file", "tag"]},
           "certificates": {"type": "integer", "minimum": 0},
           "automatic": {"type": "integer", "minimum": 0},
           "manual": {"type": "integer", "minimum": 0},

@@ -350,3 +350,110 @@ func TestDirectoryHost(t *testing.T) {
 		t.Fatal("expected unknown mode for empty input")
 	}
 }
+
+// TestClassifyKeyVaultEvidence cites Microsoft Learn for every rule.
+func TestClassifyKeyVaultEvidence(t *testing.T) {
+	days := func(value int) *int { return &value }
+	months := func(value int) *int { return &value }
+	percentage := func(value int) *int { return &value }
+	cases := []struct {
+		name       string
+		keyVault   *KeyVault
+		wantMode   Mode
+		wantHealth Health
+		wantFact   string
+		wantRisk   string
+		docsURL    string
+	}{
+		{
+			name: "AutoRenew integrated CA is automatic configured",
+			keyVault: &KeyVault{
+				Issuer:          "DigiCert",
+				ValidityMonths:  months(12),
+				LifetimeActions: []LifetimeAction{{Type: "AutoRenew", DaysBeforeExpiry: days(30)}},
+			},
+			wantMode:   ModeAutomatic,
+			wantHealth: HealthConfigured,
+			wantFact:   FactKeyVaultAutoRenew,
+			docsURL:    "https://learn.microsoft.com/en-us/azure/key-vault/certificates/configure-lifetime-rotation",
+		},
+		{
+			name: "EmailContacts only is manual positive evidence",
+			keyVault: &KeyVault{
+				Issuer:          "GlobalSign",
+				ValidityMonths:  months(12),
+				LifetimeActions: []LifetimeAction{{Type: "EmailContacts", DaysBeforeExpiry: days(30)}},
+			},
+			wantMode:   ModeManual,
+			wantHealth: HealthUnknown,
+			wantFact:   FactKeyVaultEmail,
+			docsURL:    "https://learn.microsoft.com/en-us/azure/key-vault/certificates/tutorial-rotate-certificates",
+		},
+		{
+			name: "Unknown issuer without actions is unknown",
+			keyVault: &KeyVault{
+				Issuer:          "Unknown",
+				ValidityMonths:  months(12),
+				LifetimeActions: []LifetimeAction{},
+			},
+			wantMode:   ModeUnknown,
+			wantHealth: HealthUnknown,
+			wantFact:   FactKeyVaultNoActions,
+			docsURL:    "https://learn.microsoft.com/en-us/azure/key-vault/certificates/about-certificates",
+		},
+		{
+			name: "validity above next limit is a risk",
+			keyVault: &KeyVault{
+				Issuer:          "DigiCert",
+				ValidityMonths:  months(12),
+				LifetimeActions: []LifetimeAction{{Type: "AutoRenew", DaysBeforeExpiry: days(30)}},
+			},
+			wantMode:   ModeAutomatic,
+			wantHealth: HealthConfigured,
+			wantRisk:   KindKeyVaultValidityExceedsNextLimit,
+			docsURL:    "https://learn.microsoft.com/en-us/azure/key-vault/certificates/tutorial-rotate-certificates",
+		},
+		{
+			name: "AutoRenew at lifetime is a risk",
+			keyVault: &KeyVault{
+				Issuer:          "DigiCert",
+				ValidityMonths:  months(1),
+				LifetimeActions: []LifetimeAction{{Type: "AutoRenew", LifetimePercentage: percentage(100)}},
+			},
+			wantMode:   ModeAutomatic,
+			wantHealth: HealthConfigured,
+			wantRisk:   KindKeyVaultRenewTriggerExceedsLifetime,
+			docsURL:    "https://learn.microsoft.com/en-us/azure/key-vault/certificates/tutorial-rotate-certificates",
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if test.docsURL == "" {
+				t.Fatal("test case must cite Microsoft Learn")
+			}
+			in := inputAt("2026-01-01T00:00:00Z", "2027-01-01T00:00:00Z", "2026-02-01T00:00:00Z")
+			in.KeyVault = test.keyVault
+			got := Classify(in)
+			if got.Mode != test.wantMode || got.Health != test.wantHealth {
+				t.Fatalf("classification = %s/%s, want %s/%s", got.Mode, got.Health, test.wantMode, test.wantHealth)
+			}
+			if test.wantFact != "" {
+				found := false
+				for _, evidence := range got.Evidence {
+					if evidence.Source == SourceKeyVault && evidence.Fact == test.wantFact {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("missing evidence fact %s: %+v", test.wantFact, got.Evidence)
+				}
+			}
+			if test.wantRisk != "" {
+				if _, ok := hasRisk(got, test.wantRisk); !ok {
+					t.Fatalf("missing risk %s: %+v", test.wantRisk, got.Risks)
+				}
+			}
+		})
+	}
+}

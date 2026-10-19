@@ -58,6 +58,8 @@ const (
 	SourceKubeSecret = "kube-secret"
 	// SourceConfig marks an explicit declaration in scadenza.yaml.
 	SourceConfig = "config"
+	// SourceKeyVault marks a fact read from an Azure Key Vault certificate policy.
+	SourceKeyVault = "keyvault"
 )
 
 // Stable evidence fact keys.
@@ -77,6 +79,11 @@ const (
 	FactRenewalOverdue       = "renewal-overdue"
 	FactNotAfterPassed       = "not-after-passed"
 	FactHealthCapped         = "health-capped-by-issuer-type"
+	FactKeyVaultIssuer       = "issuer"
+	FactKeyVaultValidity     = "policy-validity-months"
+	FactKeyVaultAutoRenew    = "auto-renew"
+	FactKeyVaultEmail        = "email-contacts"
+	FactKeyVaultNoActions    = "no-lifetime-actions"
 	FactDurationSource       = "duration-source"
 )
 
@@ -98,7 +105,9 @@ const (
 	KindManualRenewalAfterLimit = "manual-renewal-after-limit"
 	// KindRenewalConfigInvalid reports a spec.duration, spec.renewBefore, or
 	// spec.renewBeforePercentage value that cert-manager itself rejects.
-	KindRenewalConfigInvalid = "renewal-config-invalid"
+	KindRenewalConfigInvalid                = "renewal-config-invalid"
+	KindKeyVaultValidityExceedsNextLimit    = "keyvault-validity-exceeds-next-limit"
+	KindKeyVaultRenewTriggerExceedsLifetime = "keyvault-renew-trigger-exceeds-lifetime"
 )
 
 // cert-manager's own validity constraints on a Certificate spec. A value that
@@ -203,6 +212,20 @@ type Secret struct {
 	CertificateName string
 }
 
+// LifetimeAction is a Key Vault policy lifetime action.
+type LifetimeAction struct {
+	Type               string
+	DaysBeforeExpiry   *int
+	LifetimePercentage *int
+}
+
+// KeyVault is the certificate policy evidence read from Azure Key Vault.
+type KeyVault struct {
+	Issuer          string
+	ValidityMonths  *int
+	LifetimeActions []LifetimeAction
+}
+
 // Issuance is one Certificate Transparency issuance for cadence evidence. The
 // identity fields let cadence collapse the precertificate and the final
 // certificate of the same issuance, and the duplicate records that overlapping
@@ -228,6 +251,8 @@ type Input struct {
 
 	// Manager is the cert-manager Certificate, when one was read.
 	Manager *Manager
+	// KeyVault is the Azure Key Vault certificate policy, when one was read.
+	KeyVault *KeyVault
 	// Secrets are the kubernetes.io/tls Secret observations.
 	Secrets []Secret
 	// CT is every Certificate Transparency issuance already fetched.
@@ -251,6 +276,48 @@ func Classify(in Input) Classification {
 
 	if in.DeclaredMode != "" {
 		evidence = append(evidence, Evidence{Source: SourceConfig, Fact: FactRenewalModeDeclared, Value: string(in.DeclaredMode)})
+	}
+
+	// Key Vault policy facts are direct evidence. AutoRenew with an integrated
+	// public issuer is automatic; EmailContacts alone is manual evidence.
+	// https://learn.microsoft.com/en-us/azure/key-vault/certificates/tutorial-rotate-certificates
+	// https://learn.microsoft.com/en-us/azure/key-vault/certificates/how-to-integrate-certificate-authority
+	autoRenew := false
+	emailOnlyActions := true
+	if in.KeyVault != nil {
+		issuer := in.KeyVault.Issuer
+		if issuer == "" {
+			issuer = "Unknown"
+		}
+		evidence = append(evidence, Evidence{Source: SourceKeyVault, Fact: FactKeyVaultIssuer, Value: issuer})
+		if in.KeyVault.ValidityMonths != nil {
+			evidence = append(evidence, Evidence{
+				Source: SourceKeyVault,
+				Fact:   FactKeyVaultValidity,
+				Value:  strconv.Itoa(*in.KeyVault.ValidityMonths),
+			})
+		}
+		if len(in.KeyVault.LifetimeActions) == 0 {
+			emailOnlyActions = false
+			evidence = append(evidence, Evidence{Source: SourceKeyVault, Fact: FactKeyVaultNoActions, Value: "true"})
+		}
+		for _, action := range in.KeyVault.LifetimeActions {
+			switch normalizeKeyVaultAction(action.Type) {
+			case "autorenew":
+				autoRenew = true
+				emailOnlyActions = false
+				evidence = append(evidence, Evidence{Source: SourceKeyVault, Fact: FactKeyVaultAutoRenew, Value: action.Type})
+			case "emailcontacts":
+				evidence = append(evidence, Evidence{Source: SourceKeyVault, Fact: FactKeyVaultEmail, Value: action.Type})
+			default:
+				emailOnlyActions = false
+			}
+		}
+		if autoRenew && isIntegratedIssuer(issuer) {
+			mode = ModeAutomatic
+		} else if !autoRenew && emailOnlyActions && len(in.KeyVault.LifetimeActions) > 0 {
+			mode = ModeManual
+		}
 	}
 
 	// A Certificate resource is the renewal mechanism itself: cert-manager owns
@@ -311,7 +378,7 @@ func Classify(in Input) Classification {
 
 	// No managing controller was found. CT or TLS alone is never manual: it is
 	// unknown, with the fact that proves why.
-	if mode == ModeUnknown {
+	if mode == ModeUnknown && in.KeyVault == nil {
 		source := SourceTLS
 		switch {
 		case len(in.Secrets) > 0:
@@ -326,6 +393,7 @@ func Classify(in Input) Classification {
 
 	evidence = append(evidence, cadence(in)...)
 	risks = append(risks, configRisks(in, manager)...)
+	risks = append(risks, keyVaultRisks(in)...)
 	if health == HealthDegraded {
 		risks = append(risks, Risk{Kind: KindRenewalDegraded, Detail: degradedReason})
 	}
@@ -345,6 +413,11 @@ func Classify(in Input) Classification {
 // verdict so the risk detail can repeat it.
 func healthOf(in Input, manager *Manager, hazardousIssuer bool, evidence *[]Evidence) (Health, string) {
 	if manager == nil {
+		// Key Vault AutoRenew is configured, but the policy has no operational
+		// health signal beyond the configuration itself.
+		if in.KeyVault != nil && keyVaultAutoRenew(in.KeyVault) && isIntegratedIssuer(in.KeyVault.Issuer) {
+			return HealthConfigured, ""
+		}
 		// Without a Certificate there is no operational signal: an annotated
 		// Secret is configured, everything else is unknown.
 		for _, secret := range in.Secrets {
@@ -555,6 +628,69 @@ func configRisks(in Input, manager *Manager) []Risk {
 		}
 	}
 	return risks
+}
+
+// keyVaultRisks reports Key Vault policy configurations that will break under
+// shorter public certificate lifetimes.
+func keyVaultRisks(in Input) []Risk {
+	if in.KeyVault == nil {
+		return nil
+	}
+	risks := []Risk{}
+	if in.KeyVault.ValidityMonths != nil && in.Policy.NextLimitEffective != "" {
+		validityDays := int(math.Round(float64(*in.KeyVault.ValidityMonths) * 30.4))
+		if validityDays > in.Policy.NextLimitDays {
+			risks = append(risks, Risk{
+				Kind: KindKeyVaultValidityExceedsNextLimit,
+				Detail: "certificate policy validity " + strconv.Itoa(*in.KeyVault.ValidityMonths) +
+					" months (" + strconv.Itoa(validityDays) + " days at 30.4 days per month) exceeds the next CA/B maximum of " +
+					strconv.Itoa(in.Policy.NextLimitDays) + " days.",
+				Effective: in.Policy.NextLimitEffective,
+			})
+		}
+	}
+	if keyVaultAutoRenew(in.KeyVault) && in.KeyVault.ValidityMonths != nil {
+		lifetimeDays := int(math.Round(float64(*in.KeyVault.ValidityMonths) * 30.4))
+		for _, action := range in.KeyVault.LifetimeActions {
+			if !strings.EqualFold(strings.ReplaceAll(action.Type, "_", ""), "AutoRenew") {
+				continue
+			}
+			if action.DaysBeforeExpiry != nil && *action.DaysBeforeExpiry >= lifetimeDays {
+				risks = append(risks, Risk{
+					Kind:   KindKeyVaultRenewTriggerExceedsLifetime,
+					Detail: "AutoRenew triggers " + strconv.Itoa(*action.DaysBeforeExpiry) + " days before expiry, at or beyond the " + strconv.Itoa(lifetimeDays) + "-day policy lifetime.",
+				})
+			}
+			if action.LifetimePercentage != nil && *action.LifetimePercentage >= 100 {
+				risks = append(risks, Risk{
+					Kind:   KindKeyVaultRenewTriggerExceedsLifetime,
+					Detail: "AutoRenew triggers at " + strconv.Itoa(*action.LifetimePercentage) + "% of lifetime, at or beyond the certificate lifetime.",
+				})
+			}
+		}
+	}
+	return risks
+}
+
+func keyVaultAutoRenew(policy *KeyVault) bool {
+	if policy == nil {
+		return false
+	}
+	for _, action := range policy.LifetimeActions {
+		if normalizeKeyVaultAction(action.Type) == "autorenew" {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeKeyVaultAction(value string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", ""))
+}
+
+func isIntegratedIssuer(value string) bool {
+	issuer := strings.ToLower(strings.TrimSpace(value))
+	return issuer != "" && issuer != "self" && issuer != "unknown"
 }
 
 // manualRenewalRisk reports a manual certificate whose next renewal falls after

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce per-package coverage floors (70 percent, 85 for internal/renewal)."""
+"""Enforce package coverage floors, including cloud-source safety code."""
 import collections
 import pathlib
 import sys
@@ -8,7 +8,7 @@ DEFAULT_FLOOR = 70
 # Packages that must meet a higher floor than the project default. The renewal
 # classification is the 0.1.0 core answer, so it carries the 85 percent floor
 # required by M4b.
-FLOORS = {"internal/renewal": 85}
+FLOORS = {"internal/renewal": 85, "internal/azurekv": 80}
 
 totals = collections.defaultdict(lambda: [0, 0])
 for line in pathlib.Path("coverage.out").read_text(encoding="utf-8").splitlines()[1:]:

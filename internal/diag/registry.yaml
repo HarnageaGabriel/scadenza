@@ -124,7 +124,7 @@ codes:
     slug: invalid-fail-on-kind
     severity: error
     summary: Invalid --fail-on kind
-    explanation: The --fail-on value listed a kind that is not one of ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, renewal-config-invalid, or none, or combined none with another kind.
+    explanation: The --fail-on value listed a kind that is not one of ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, renewal-config-invalid, keyvault-validity-exceeds-next-limit, keyvault-renew-trigger-exceeds-lifetime, or none, or combined none with another kind.
     remediation: Use only the documented kinds; pass none alone to disable exit 3.
   - code: SCD-0022
     slug: config-invalid
@@ -174,3 +174,27 @@ codes:
     summary: Kubernetes Secret data reads are enabled
     explanation: The --kube-secrets flag or kube.secrets configuration enables full kubernetes.io/tls Secret reads so scadenza can parse tls.crt and compute fingerprints. Secret private keys are dropped immediately and are never retained. The diagnostic detail identifies every namespace whose Secret data may be read.
     remediation: Remove --kube-secrets or set kube.secrets to false when Secret metadata and cert-manager status are sufficient.
+  - code: SCD-0030
+    slug: azure-keyvault-unauthorized
+    severity: error
+    summary: Azure Key Vault rejected the request
+    explanation: Key Vault returned HTTP 401 Unauthorized, so the requested certificate source is unavailable. Only the HTTP status and vault host are reported; credential and raw error text are never logged.
+    remediation: Run az login or configure the supported Azure default credential environment, then verify the vault URI.
+  - code: SCD-0031
+    slug: azure-keyvault-forbidden
+    severity: warning
+    summary: Azure Key Vault read was partially forbidden
+    explanation: HTTP 403 Forbidden on a certificate or policy read skips that certificate and makes the scan partial. HTTP 403 while listing a vault means that vault is not read; when no vault could be read, coverage is failed. Only the HTTP status and vault host are reported.
+    remediation: Grant the verified built-in Key Vault Reader role at vault scope, or legacy certificate get and list permissions; never grant secret-value access for scadenza.
+  - code: SCD-0032
+    slug: azure-keyvault-unreachable
+    severity: error
+    summary: Azure Key Vault source is unavailable
+    explanation: The vault could not be read because the default credential chain failed, the connection failed, the response was invalid, or the context ended. Only a safe classification and vault host are reported.
+    remediation: Verify network access, DNS, the vault URI, and az login or the supported Azure default credential environment.
+  - code: SCD-0033
+    slug: azure-keyvault-item-skipped
+    severity: warning
+    summary: An Azure Key Vault certificate was skipped
+    explanation: One certificate could not be read (not found after listing, no issued certificate yet, or an invalid response) and was left out, so the scan is partial. Only the HTTP status, when there is one, and the vault host are reported.
+    remediation: Check the certificate in the vault; a pending or deleted certificate needs no action.
