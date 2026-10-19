@@ -12,11 +12,13 @@ jobs:
   discover:
     runs-on: ubuntu-latest
     outputs:
-      targets: ${{ steps.targets.outputs.targets }}
+      targets: "${{ steps.targets.outputs.targets }}"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: {go-version-file: go.mod, cache: true}
+        with:
+          go-version-file: go.mod
+          cache: true
       - id: targets
         shell: bash
         run: echo "targets=$(sh scripts/list-fuzz-targets.sh | jq -Rsc 'split("\n") | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
@@ -24,19 +26,25 @@ jobs:
     needs: discover
     if: needs.discover.outputs.targets != '[]'
     strategy:
-      matrix: {target: ${{ fromJSON(needs.discover.outputs.targets) }}}
+      matrix:
+        target: "${{ fromJSON(needs.discover.outputs.targets) }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: {go-version-file: go.mod, cache: true}
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Fuzz for two minutes
         env:
-          FUZZ_TARGET: ${{ matrix.target }}
+          FUZZ_TARGET: "${{ matrix.target }}"
         run: |
           pkg="${FUZZ_TARGET%% *}"
           name="${FUZZ_TARGET##* }"
           go test "$pkg" -run '^$' -fuzz "^${name}$" -fuzztime 2m
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
-        with: {name: fuzz-crashers-${{ strategy.job-index }}, path: '**/testdata/fuzz', if-no-files-found: ignore}
+        with:
+          name: "fuzz-crashers-${{ strategy.job-index }}"
+          path: '**/testdata/fuzz'
+          if-no-files-found: ignore
