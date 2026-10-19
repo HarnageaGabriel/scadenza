@@ -284,15 +284,30 @@ func TestProbeErrorClasses(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = blackhole.Close() }()
+	// With nothing referencing an accepted connection the GC can finalize it and
+	// close the socket, turning a read into EOF. Keeping the conns alive until
+	// the test ends makes the probe reliably hit the connect timeout.
+	var held sync.Mutex
+	var heldConnections []net.Conn
 	go func() {
 		for {
 			connection, acceptErr := blackhole.Accept()
 			if acceptErr != nil {
 				return
 			}
-			_ = connection
+			held.Lock()
+			heldConnections = append(heldConnections, connection)
+			held.Unlock()
 		}
 	}()
+	t.Cleanup(func() {
+		held.Lock()
+		defer held.Unlock()
+		for _, connection := range heldConnections {
+			_ = connection.Close()
+		}
+		heldConnections = nil
+	})
 	blackholeAddress := blackhole.Addr().(*net.TCPAddr)
 	_, err = (&Prober{Clock: clock.Fixed{Time: testNow}, Timeout: 150 * time.Millisecond}).Probe(context.Background(), "127.0.0.1", blackholeAddress.Port, "")
 	if class(err) != ClassConnectTimeout {
