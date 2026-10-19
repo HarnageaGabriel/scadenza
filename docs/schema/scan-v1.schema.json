@@ -68,7 +68,8 @@
                   "properties": {
                     "source": {"enum": ["cert-manager", "ct", "tls", "kube-secret", "config", "keyvault"]},
                     "fact": {"type": "string", "minLength": 1},
-                    "value": {"type": "string"}
+                    "value": {"type": "string"},
+                    "vault": {"type": "string", "minLength": 1}
                   }
                 }
               },
@@ -94,7 +95,7 @@
               "additionalProperties": false,
               "required": ["source", "location", "detail"],
               "properties": {
-                "source": {"enum": ["ct-certspotter", "ct-crtsh", "tls", "kube-secret", "kube-secret-metadata", "cert-manager"]},
+                "source": {"enum": ["ct-certspotter", "ct-crtsh", "tls", "kube-secret", "kube-secret-metadata", "cert-manager", "azure-keyvault"]},
                 "location": {"type": "string"},
                 "detail": {"type": "string"},
                 "kubernetes": {
@@ -128,13 +129,13 @@
                   "properties": {
                     "name": {"type": "string", "minLength": 1},
                     "vault": {"type": "string", "minLength": 1},
-                    "version": {"type": "string", "minLength": 1},
+                    "version": {"type": "string"},
                     "enabled": {"type": "boolean"},
                     "not_before": {"type": "string", "format": "date-time"},
                     "not_after": {"type": "string", "format": "date-time"},
                     "issuer": {"type": "string", "minLength": 1},
                     "policy_validity_months": {"type": "integer", "minimum": 1},
-                    "lifetime_actions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"enum": ["AutoRenew", "EmailContacts"]}, "days_before_expiry": {"type": "integer", "minimum": 0}, "lifetime_percentage": {"type": "integer", "minimum": 0}}}},
+                    "lifetime_actions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"type": "string", "description": "Azure lifetime action type; empty and future provider values are preserved."}, "days_before_expiry": {"type": "integer", "minimum": 0}, "lifetime_percentage": {"type": "integer", "minimum": 0}}}},
                     "tags": {"type": "object", "additionalProperties": {"type": "string"}},
                     "content_type": {"type": "string"}
                   }

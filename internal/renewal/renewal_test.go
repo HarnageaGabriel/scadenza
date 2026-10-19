@@ -1,6 +1,7 @@
 package renewal
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -378,6 +379,36 @@ func TestClassifyKeyVaultEvidence(t *testing.T) {
 			docsURL:    "https://learn.microsoft.com/en-us/azure/key-vault/certificates/configure-lifetime-rotation",
 		},
 		{
+			name: "AutoRenew Self is automatic configured",
+			keyVault: &KeyVault{
+				Issuer:          "Self",
+				LifetimeActions: []LifetimeAction{{Type: "AutoRenew"}},
+			},
+			wantMode:   ModeAutomatic,
+			wantHealth: HealthConfigured,
+			wantFact:   FactKeyVaultIssuer,
+			docsURL:    "https://learn.microsoft.com/en-us/azure/key-vault/certificates/about-certificates",
+		},
+		{
+			name:       "Self without actions is unknown",
+			keyVault:   &KeyVault{Issuer: "Self"},
+			wantMode:   ModeUnknown,
+			wantHealth: HealthUnknown,
+			wantFact:   FactKeyVaultNoActions,
+			docsURL:    "https://learn.microsoft.com/en-us/azure/key-vault/certificates/about-certificates",
+		},
+		{
+			name: "Unknown AutoRenew stays unknown",
+			keyVault: &KeyVault{
+				Issuer:          "Unknown",
+				LifetimeActions: []LifetimeAction{{Type: "AutoRenew"}},
+			},
+			wantMode:   ModeUnknown,
+			wantHealth: HealthUnknown,
+			wantFact:   FactKeyVaultAutoRenew,
+			docsURL:    "https://learn.microsoft.com/en-us/azure/key-vault/certificates/about-certificates",
+		},
+		{
 			name: "EmailContacts only is manual positive evidence",
 			keyVault: &KeyVault{
 				Issuer:          "GlobalSign",
@@ -455,5 +486,50 @@ func TestClassifyKeyVaultEvidence(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestKeyVaultValidityUsesPolicyAtEvaluationTime(t *testing.T) {
+	months := 3
+	base := Input{
+		NotBefore: at("2026-01-01T00:00:00Z"),
+		Policy: policy.Assessment{
+			NextLimitDays:      100,
+			NextLimitEffective: "2027-03-15T00:00:00Z",
+		},
+		KeyVault: &KeyVault{Issuer: "DigiCert", ValidityMonths: &months},
+	}
+
+	base.Now = at("2027-01-01T00:00:00Z")
+	if _, ok := hasRisk(Classify(base), KindKeyVaultValidityExceedsNextLimit); ok {
+		t.Fatal("three-month upper bound must fit the next 100-day limit")
+	}
+	months = 4
+	risk, ok := hasRisk(Classify(base), KindKeyVaultValidityExceedsNextLimit)
+	if !ok || !strings.Contains(risk.Detail, "100 days") {
+		t.Fatalf("risk = %+v, want evaluation-time 100-day comparison", risk)
+	}
+
+	months = 3
+	base.Now = at("2028-01-01T00:00:00Z")
+	risk, ok = hasRisk(Classify(base), KindKeyVaultValidityExceedsNextLimit)
+	if !ok || !strings.Contains(risk.Detail, "47 days") {
+		t.Fatalf("risk = %+v, want evaluation-time 47-day comparison", risk)
+	}
+}
+
+func TestKeyVaultMonthBounds(t *testing.T) {
+	months := 1
+	days := 29
+	got := Classify(Input{
+		Now: at("2026-01-01T00:00:00Z"),
+		KeyVault: &KeyVault{
+			Issuer:          "DigiCert",
+			ValidityMonths:  &months,
+			LifetimeActions: []LifetimeAction{{Type: "AutoRenew", DaysBeforeExpiry: &days}},
+		},
+	})
+	if _, ok := hasRisk(got, KindKeyVaultRenewTriggerExceedsLifetime); !ok {
+		t.Fatalf("29-day trigger must exceed the 28-day lower bound: %+v", got.Risks)
 	}
 }

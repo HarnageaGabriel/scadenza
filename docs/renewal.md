@@ -53,6 +53,9 @@ scadenza can observe, so its health is `unknown`; the risk
 
 - A certificate seen only in Certificate Transparency or a live TLS handshake,
   or a `kubernetes.io/tls` Secret with no `cert-manager.io/certificate-name`
+  annotation and no `Certificate` referencing it, is `unknown`, **not**
+  `manual`. The evidence carries the fact `no-managing-controller-found`.
+
 ### Manual
 
 `manual` requires positive evidence. Today the only source is an explicit
@@ -67,11 +70,11 @@ renewal:
 The declaration is recorded as evidence with source `config`. An automatic
 mechanism still wins: a `manual` declaration for a certificate that a
 cert-manager `Certificate` manages does not change the mode, and the
-declaration stays visible as evidence. An Azure Key Vault policy with only
-`EmailContacts` lifetime actions is the
-second positive source. `AutoRenew` with an integrated public CA is `automatic`
-and `configured`; issuer `Self` is private. `Unknown` with no actions stays
-`unknown` and records `no-lifetime-actions`.
+declaration stays visible as evidence. An Azure Key Vault policy with lifetime
+actions but no `AutoRenew` action is the second positive source. `AutoRenew`
+with an integrated public CA or issuer
+`Self` is `automatic` and `configured`; `Self` remains private. `Unknown` with
+no actions stays `unknown` and records `no-lifetime-actions`.
 
 ## Health, from the injected clock
 
@@ -130,10 +133,12 @@ Each risk is also a finding, with its own diagnostic:
   (equal is invalid), and `spec.renewBeforePercentage` must be an integer
   percentage between 1 and 99 of the actual issued lifetime. Source:
   <https://cert-manager.io/docs/usage/certificate/>.
-- `keyvault-validity-exceeds-next-limit` - the Key Vault policy validity,
-  converted at 30.4 days per month, exceeds the next CA/B maximum.
+- `keyvault-validity-exceeds-next-limit` - the Key Vault policy validity uses a
+  conservative upper bound of 31 days per month and exceeds the next CA/B
+  maximum.
 - `keyvault-renew-trigger-exceeds-lifetime` - a Key Vault `AutoRenew` trigger
-  is at or beyond the policy lifetime.
+  is at or beyond the policy lifetime's conservative lower bound of 28 days per
+  month.
 
 The CA/B step these risks compare against is chosen at the evaluation instant
 (`--now`), not from the certificate's `notBefore`: the next scheduled step, or,

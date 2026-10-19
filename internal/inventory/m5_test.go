@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -67,6 +68,53 @@ func TestCorrelateAzureKeyVaultBySHA256(t *testing.T) {
 	}
 	if findings[0].Kind != KindMatched {
 		t.Fatalf("finding = %s, want matched", findings[0].Kind)
+	}
+}
+
+func TestCorrelateAggregatesKeyVaultPoliciesInEitherOrder(t *testing.T) {
+	fingerprint := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	notBefore := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	notAfter := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	eightMonths, oneMonth, days := 8, 1, 29
+	a := azurekv.Certificate{
+		Fingerprint: fingerprint, Names: []string{"shared.example"}, NotBefore: notBefore, NotAfter: notAfter,
+		Facts: azurekv.Facts{
+			Name: "shared", Vault: "a-vault", Version: "v1", NotBefore: notBefore, NotAfter: notAfter,
+			Issuer: "Unknown", PolicyValidityMonths: &eightMonths, LifetimeActions: []azurekv.LifetimeAction{}, Tags: map[string]string{},
+		},
+	}
+	b := azurekv.Certificate{
+		Fingerprint: fingerprint, Names: []string{"shared.example"}, NotBefore: notBefore, NotAfter: notAfter,
+		Facts: azurekv.Facts{
+			Name: "shared", Vault: "b-vault", Version: "v1", NotBefore: notBefore, NotAfter: notAfter,
+			Issuer: "DigiCert", PolicyValidityMonths: &oneMonth,
+			LifetimeActions: []azurekv.LifetimeAction{{Type: "AutoRenew", DaysBeforeExpiry: &days}}, Tags: map[string]string{},
+		},
+	}
+
+	for _, azure := range [][]azurekv.Certificate{{a, b}, {b, a}} {
+		certificates, _ := Correlate(Input{Azure: azure, Now: time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)})
+		got := certificates[0].Renewal
+		if got.Mode != renewal.ModeAutomatic || got.Health != renewal.HealthConfigured {
+			t.Fatalf("classification = %s/%s, want automatic/configured", got.Mode, got.Health)
+		}
+		kinds := make([]string, 0, len(got.Risks))
+		for _, risk := range got.Risks {
+			kinds = append(kinds, risk.Kind)
+		}
+		if !slices.Contains(kinds, renewal.KindKeyVaultValidityExceedsNextLimit) ||
+			!slices.Contains(kinds, renewal.KindKeyVaultRenewTriggerExceedsLifetime) {
+			t.Fatalf("risks = %v, want union from both vaults", kinds)
+		}
+		foundVault := false
+		for _, evidence := range got.Evidence {
+			if evidence.Fact == renewal.FactKeyVaultAutoRenew && evidence.Vault == "b-vault" {
+				foundVault = true
+			}
+		}
+		if !foundVault {
+			t.Fatalf("automatic evidence does not identify b-vault: %+v", got.Evidence)
+		}
 	}
 }
 

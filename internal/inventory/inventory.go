@@ -713,18 +713,20 @@ func renewalInput(certificate Certificate, in Input) renewal.Input {
 				input.Secrets = append(input.Secrets, renewal.Secret{CertificateName: observation.Kubernetes.CertificateName})
 			}
 		case SourceAzureKeyVault:
-			if observation.KeyVault != nil && input.KeyVault == nil {
-				input.KeyVault = &renewal.KeyVault{
+			if observation.KeyVault != nil {
+				keyVault := renewal.KeyVault{
+					Vault:          observation.KeyVault.Vault,
 					Issuer:         observation.KeyVault.Issuer,
 					ValidityMonths: observation.KeyVault.PolicyValidityMonths,
 				}
 				for _, action := range observation.KeyVault.LifetimeActions {
-					input.KeyVault.LifetimeActions = append(input.KeyVault.LifetimeActions, renewal.LifetimeAction{
+					keyVault.LifetimeActions = append(keyVault.LifetimeActions, renewal.LifetimeAction{
 						Type:               action.Type,
 						DaysBeforeExpiry:   action.DaysBeforeExpiry,
 						LifetimePercentage: action.LifetimePercentage,
 					})
 				}
+				input.KeyVaults = append(input.KeyVaults, keyVault)
 			}
 		case SourceCertManager:
 			input.HasKube = true
