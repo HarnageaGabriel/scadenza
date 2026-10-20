@@ -115,6 +115,19 @@ func TestLoadResolvesRelativePathsFromConfigDirectory(t *testing.T) {
 	}
 }
 
+func TestParseKeepsAzureKeyVaultsVerbatim(t *testing.T) {
+	// The loader does not trim a vault URI: a padded value stays padded so
+	// the command layer can reject it and name it.
+	document := "version: 1\nazure:\n  keyVaults: [\"https://demo.vault.azure.net \"]\n"
+	config, err := Parse([]byte(document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Azure.KeyVaults) != 1 || config.Azure.KeyVaults[0] != "https://demo.vault.azure.net " {
+		t.Fatalf("keyVaults = %q", config.Azure.KeyVaults)
+	}
+}
+
 func FuzzParse(f *testing.F) {
 	f.Add([]byte("version: 1\n"))
 	f.Add([]byte("version: 1\npolicy:\n  failOn: [none]\n"))
