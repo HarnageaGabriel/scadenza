@@ -33,6 +33,6 @@ CSV output sanitizes every text cell before it is written: tabs, carriage return
 
 Cert Spotter pagination requires a non-empty cursor that advances on every page and stops after 1000 pages (SCD-0004 otherwise). On HTTP 429 the Retry-After delay (seconds or HTTP-date, clamped to 30s) is honored for one retry, then the source is reported rate-limited (SCD-0003) and fallback applies. Redirects to a different scheme or host are refused. A record whose `not_after` precedes `not_before` fails the source response as malformed (SCD-0004).
 
-Failures and fallback warnings are written to stderr. When every selected source fails, the command exits 4. Invalid domains or flags exit 2.
+Failures and fallback warnings are written to stderr. When every selected source fails, the command exits 4. Invalid domains or flags exit 2. An interrupted run exits 130 and writes no report.
 
 See also [`scadenza scan`](scan.md) and [`scadenza version`](version.md).

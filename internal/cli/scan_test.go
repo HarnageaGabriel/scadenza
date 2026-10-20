@@ -103,7 +103,7 @@ func TestScanGoldenFormats(t *testing.T) {
 	for _, format := range []string{"table", "json", "csv"} {
 		t.Run(format, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", format}, &stdout, &stderr, scanDependencies(server.URL, goldenProber()))
+			code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", format}, &stdout, &stderr, scanDependencies(server.URL, goldenProber()))
 			if code != ExitFindingsPresent {
 				t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 			}
@@ -128,7 +128,7 @@ func TestScanGoldenFormats(t *testing.T) {
 func TestScanGoldenDiagnosticsAndUnresolved(t *testing.T) {
 	server := certSpotterServer(t, scanCTFixture())
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, goldenProber()))
+	code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, goldenProber()))
 	if code != ExitFindingsPresent {
 		t.Fatalf("exit = %d", code)
 	}
@@ -237,7 +237,7 @@ func TestScanAgainstLocalTLS(t *testing.T) {
 	server := certSpotterServer(t, body)
 	prober := &tlsprobe.Prober{Timeout: 3 * time.Second, Clock: clock.Fixed{Time: testNowScan}, Resolver: loopbackResolver{}}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
+	code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -248,7 +248,7 @@ func TestScanAgainstLocalTLS(t *testing.T) {
 	// The same live server without CT is a live-only finding.
 	stdout.Reset()
 	stderr.Reset()
-	code = execute([]string{"scan", "--from-ct=false", "--host", "127.0.0.1:" + strconv.Itoa(port), "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
+	code = execute(context.Background(), []string{"scan", "--from-ct=false", "--host", "127.0.0.1:" + strconv.Itoa(port), "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
 	if code != ExitFindingsPresent || !strings.Contains(stdout.String(), `"kind":"live_only"`) || !strings.Contains(stdout.String(), "private_or_untrusted") {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -267,7 +267,7 @@ func TestScanExitCodesAndValidation(t *testing.T) {
 		{"scan", "--from-ct=false"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := execute(args, &stdout, &stderr, scanDependencies("x", fakeProber{})); code != ExitUsageError || !strings.Contains(stderr.String(), "SCD-0001") {
+		if code := execute(context.Background(), args, &stdout, &stderr, scanDependencies("x", fakeProber{})); code != ExitUsageError || !strings.Contains(stderr.String(), "SCD-0001") {
 			t.Fatalf("args=%v code=%d stderr=%s", args, code, stderr.String())
 		}
 	}
@@ -281,7 +281,7 @@ func TestScanExitCodesAndValidation(t *testing.T) {
 	defer server.Close()
 	prober := &tlsprobe.Prober{Timeout: 3 * time.Second, Clock: clock.Fixed{Time: testNowScan}, Resolver: loopbackResolver{}}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--host", "127.0.0.1:1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
+	code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--host", "127.0.0.1:1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
 	if code != ExitSourceUnavailable {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
@@ -300,7 +300,7 @@ func TestScanExitCodesAndValidation(t *testing.T) {
 	// the findings.
 	stdout.Reset()
 	stderr.Reset()
-	code = execute([]string{"scan", "--from-ct=false", "--host", "127.0.0.1:1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
+	code = execute(context.Background(), []string{"scan", "--from-ct=false", "--host", "127.0.0.1:1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -319,7 +319,7 @@ func TestScanWildcardAndHostCap(t *testing.T) {
 ]`, strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64))
 	server := certSpotterServer(t, body)
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--host", "127.0.0.1:1", "--max-hosts", "1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, fakeProber{failures: map[string]tlsprobe.ErrorClass{"127.0.0.1:1": tlsprobe.ClassRefused}}))
+	code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--host", "127.0.0.1:1", "--max-hosts", "1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, fakeProber{failures: map[string]tlsprobe.ErrorClass{"127.0.0.1:1": tlsprobe.ClassRefused}}))
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
@@ -367,7 +367,7 @@ func TestScanMaxHostsKeepsExplicitTargets(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	// The explicit host sorts after every derived name, so it would be dropped
 	// first if the cap were applied to the whole target list.
-	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--host", "zzz.example.test:1", "--max-hosts", "1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, fakeProber{failures: map[string]tlsprobe.ErrorClass{"zzz.example.test:1": tlsprobe.ClassRefused}}))
+	code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--host", "zzz.example.test:1", "--max-hosts", "1", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, fakeProber{failures: map[string]tlsprobe.ErrorClass{"zzz.example.test:1": tlsprobe.ClassRefused}}))
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
@@ -420,7 +420,7 @@ func TestScanHostsFileAndFuzz(t *testing.T) {
 		"127.0.0.1:8443": {Fingerprint: strings.Repeat("f", 64), Names: []string{"example.com"}, Issuer: "CN=Live", NotBefore: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), Trusted: true},
 	}}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--from-ct=false", "--hosts-file", path, "--format", "json"}, &stdout, &stderr, scanDependencies("x", prober))
+	code := execute(context.Background(), []string{"scan", "--from-ct=false", "--hosts-file", path, "--format", "json"}, &stdout, &stderr, scanDependencies("x", prober))
 	if code != ExitFindingsPresent {
 		t.Fatalf("exit = %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -474,7 +474,7 @@ func TestScanKubeClientErrorsNeverLeakRawText(t *testing.T) {
 		err:    errors.New(secret),
 	}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--kube", "--format", "json"}, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, source, nil))
+	code := execute(context.Background(), []string{"scan", "--kube", "--format", "json"}, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, source, nil))
 	if code != ExitSourceUnavailable {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
@@ -565,7 +565,7 @@ func kubeFixture() kube.Result {
 
 func TestScanKubeGoldenJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--kube", "--format", "json"}, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil))
+	code := execute(context.Background(), []string{"scan", "--kube", "--format", "json"}, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil))
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
@@ -589,7 +589,7 @@ func TestScanKubeGoldenJSON(t *testing.T) {
 
 	// Determinism: a second identical run must produce byte-identical output.
 	var repeat, repeatErr bytes.Buffer
-	if code := execute([]string{"scan", "--kube", "--format", "json"}, &repeat, &repeatErr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
+	if code := execute(context.Background(), []string{"scan", "--kube", "--format", "json"}, &repeat, &repeatErr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
 		t.Fatalf("repeat exit = %d", code)
 	}
 	if normalizeLines(repeat.String()) != normalizeLines(stdout.String()) {
@@ -600,7 +600,7 @@ func TestScanKubeGoldenJSON(t *testing.T) {
 func TestScanKubePartialFailureIsNotExitFour(t *testing.T) {
 	server := certSpotterServer(t, scanCTFixture())
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--kube", "--format", "json"},
+	code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--kube", "--format", "json"},
 		&stdout, &stderr, scanKubeDependencies(server.URL, fakeProber{}, fakeKubeSource{}, errors.New("dial tcp: connection refused")))
 	if code == ExitSourceUnavailable {
 		t.Fatalf("partial Kubernetes failure must not exit 4; stderr=%s", stderr.String())
@@ -612,7 +612,7 @@ func TestScanKubePartialFailureIsNotExitFour(t *testing.T) {
 
 func TestScanKubeAllSourcesFail(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--kube", "--format", "json"},
+	code := execute(context.Background(), []string{"scan", "--kube", "--format", "json"},
 		&stdout, &stderr, scanKubeDependencies("x", fakeProber{}, nil, errors.New("no configuration has been provided")))
 	if code != ExitSourceUnavailable {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
@@ -628,7 +628,7 @@ func TestScanKubeOwnershipFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--kube", "--ownership-file", valid, "--format", "json"},
+	code := execute(context.Background(), []string{"scan", "--kube", "--ownership-file", valid, "--format", "json"},
 		&stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil))
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
@@ -642,14 +642,14 @@ func TestScanKubeOwnershipFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	var badOut, badErr bytes.Buffer
-	code = execute([]string{"scan", "--kube", "--ownership-file", invalid, "--format", "json"},
+	code = execute(context.Background(), []string{"scan", "--kube", "--ownership-file", invalid, "--format", "json"},
 		&badOut, &badErr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{}, nil))
 	if code != ExitUsageError || !strings.Contains(badErr.String(), kube.CodeOwnershipFileInvalid) {
 		t.Fatalf("invalid ownership file: code=%d stderr=%s", code, badErr.String())
 	}
 
 	missing := filepath.Join(t.TempDir(), "absent.yaml")
-	code = execute([]string{"scan", "--kube", "--ownership-file", missing, "--format", "json"},
+	code = execute(context.Background(), []string{"scan", "--kube", "--ownership-file", missing, "--format", "json"},
 		&badOut, &badErr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{}, nil))
 	if code != ExitUsageError {
 		t.Fatalf("missing ownership file: code=%d", code)
@@ -667,7 +667,7 @@ func TestScanKubeFlagsRequireKube(t *testing.T) {
 		{"scan", "--domain", "example.com", "--kube-qps", "1"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := execute(args, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{}, nil)); code != ExitUsageError || !strings.Contains(stderr.String(), "SCD-0001") {
+		if code := execute(context.Background(), args, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{}, nil)); code != ExitUsageError || !strings.Contains(stderr.String(), "SCD-0001") {
 			t.Fatalf("args=%v code=%d stderr=%s", args, code, stderr.String())
 		}
 	}
@@ -682,7 +682,7 @@ func TestScanKubePassesNamespacesAndRate(t *testing.T) {
 		return fakeKubeSource{}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--kube", "--namespace", "payments", "--namespace", "shop", "--kube-context", "prod", "--kube-qps", "9", "--format", "json"},
+	code := execute(context.Background(), []string{"scan", "--kube", "--namespace", "payments", "--namespace", "shop", "--kube-context", "prod", "--kube-qps", "9", "--format", "json"},
 		&stdout, &stderr, dependencies)
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
@@ -709,7 +709,7 @@ func TestScanKubeSecretsFlagAndDiagnostic(t *testing.T) {
 		return fakeKubeSource{}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{
+	code := execute(context.Background(), []string{
 		"scan", "--kube", "--kube-secrets", "--namespace", "shop", "--namespace", "payments",
 		"--format", "json",
 	}, &stdout, &stderr, dependencies)
@@ -730,7 +730,7 @@ func TestScanKubeSecretsFlagAndDiagnostic(t *testing.T) {
 // be built, so the opt-in is always recorded.
 func TestScanKubeSecretsDiagnosticOnClientFailure(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--kube", "--kube-secrets", "--namespace", "payments", "--format", "json"},
+	code := execute(context.Background(), []string{"scan", "--kube", "--kube-secrets", "--namespace", "payments", "--format", "json"},
 		&stdout, &stderr, scanKubeDependencies("x", fakeProber{}, nil, errors.New("cannot reach the API server")))
 	if code != ExitSourceUnavailable {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
@@ -827,7 +827,7 @@ func TestScanFallbackDiagnosticOnlyAfterSuccess(t *testing.T) {
 	dependencies := testCTDependencies(server.URL+"/cert", server.URL+"/crt")
 	dependencies.prober = fakeProber{}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter,crtsh", "--host", "127.0.0.1:1", "--format", "json"}, &stdout, &stderr, dependencies)
+	code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter,crtsh", "--host", "127.0.0.1:1", "--format", "json"}, &stdout, &stderr, dependencies)
 	if code == ExitSourceUnavailable {
 		t.Fatalf("a successful fallback must not be exit 4; stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}

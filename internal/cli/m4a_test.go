@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,7 +70,7 @@ func TestScanCTOnlyRespectsFailOn(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := execute(test.args, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber()))
+			code := execute(context.Background(), test.args, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber()))
 			if code != test.want {
 				t.Fatalf("exit = %d, want %d; stderr=%s", code, test.want, stderr.String())
 			}
@@ -99,17 +100,17 @@ func TestScanExitPrecedence(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := execute(test.args, &stdout, &stderr, scanDependencies(test.url, goldenProber()))
+			code := execute(context.Background(), test.args, &stdout, &stderr, scanDependencies(test.url, goldenProber()))
 			if code != test.want {
 				t.Fatalf("exit = %d, want %d; stderr=%s", code, test.want, stderr.String())
 			}
 		})
 	}
-	if code := execute([]string{"scan", "--domain", "example.com", "--fail-on", "bogus"}, &bytes.Buffer{}, &bytes.Buffer{}, scanDependencies(server.URL, goldenProber())); code != ExitUsageError {
+	if code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--fail-on", "bogus"}, &bytes.Buffer{}, &bytes.Buffer{}, scanDependencies(server.URL, goldenProber())); code != ExitUsageError {
 		t.Fatalf("unknown fail-on kind exit = %d", code)
 	}
 	var stderr bytes.Buffer
-	if code := execute([]string{"scan", "--domain", "example.com", "--format", "json", "--now", "not-a-time"}, &bytes.Buffer{}, &stderr, scanDependencies(server.URL, goldenProber())); code != ExitUsageError {
+	if code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--format", "json", "--now", "not-a-time"}, &bytes.Buffer{}, &stderr, scanDependencies(server.URL, goldenProber())); code != ExitUsageError {
 		t.Fatalf("bad --now exit = %d", code)
 	}
 }
@@ -117,7 +118,7 @@ func TestScanExitPrecedence(t *testing.T) {
 func TestScanNowSetsGeneratedAt(t *testing.T) {
 	server := certSpotterServer(t, ctOnlyFixture())
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json", "--now", "2026-03-01T00:00:00Z"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber()))
+	code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json", "--now", "2026-03-01T00:00:00Z"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber()))
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
@@ -134,11 +135,11 @@ func TestScanConfigFileAndPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := execute([]string{"scan", "--config", path, "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code != ExitOK {
+	if code := execute(context.Background(), []string{"scan", "--config", path, "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code != ExitOK {
 		t.Fatalf("config-selected scenario exit = %d; stderr=%s", code, stderr.String())
 	}
 	// A command-line flag overrides the file value.
-	if code := execute([]string{"scan", "--config", path, "--source", "certspotter", "--fail-on", "ct_only", "--format", "json"}, &bytes.Buffer{}, &bytes.Buffer{}, scanDependencies(server.URL, ctOnlyProber())); code != ExitFindingsPresent {
+	if code := execute(context.Background(), []string{"scan", "--config", path, "--source", "certspotter", "--fail-on", "ct_only", "--format", "json"}, &bytes.Buffer{}, &bytes.Buffer{}, scanDependencies(server.URL, ctOnlyProber())); code != ExitFindingsPresent {
 		t.Fatalf("flag must override file: exit = %d", code)
 	}
 
@@ -147,7 +148,7 @@ func TestScanConfigFileAndPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	var badErr bytes.Buffer
-	if code := execute([]string{"scan", "--config", invalid, "--domain", "example.com"}, &bytes.Buffer{}, &badErr, scanDependencies(server.URL, ctOnlyProber())); code != ExitUsageError || !strings.Contains(badErr.String(), "SCD-0022") {
+	if code := execute(context.Background(), []string{"scan", "--config", invalid, "--domain", "example.com"}, &bytes.Buffer{}, &badErr, scanDependencies(server.URL, ctOnlyProber())); code != ExitUsageError || !strings.Contains(badErr.String(), "SCD-0022") {
 		t.Fatalf("invalid config exit = %d stderr = %s", code, badErr.String())
 	}
 }

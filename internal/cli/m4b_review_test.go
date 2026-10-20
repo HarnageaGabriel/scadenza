@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,7 @@ func TestScanManualRenewalNormalizedConfigKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := execute([]string{"scan", "--config", path, "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code != ExitOK {
+	if code := execute(context.Background(), []string{"scan", "--config", path, "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
 	document := decodeM4b(t, stdout.Bytes())
@@ -46,7 +47,7 @@ func TestScanRejectsMalformedRenewalKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := execute([]string{"scan", "--config", path, "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code != ExitUsageError {
+	if code := execute(context.Background(), []string{"scan", "--config", path, "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code != ExitUsageError {
 		t.Fatalf("exit = %d, want %d; stderr=%s", code, ExitUsageError, stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "SCD-0022") {
@@ -59,7 +60,7 @@ func TestScanRejectsMalformedRenewalKey(t *testing.T) {
 func TestScanAcceptsRenewalConfigInvalidFailOn(t *testing.T) {
 	server := certSpotterServer(t, ctOnlyFixture())
 	var stdout, stderr bytes.Buffer
-	if code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--fail-on", "renewal-config-invalid", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code == ExitUsageError {
+	if code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--fail-on", "renewal-config-invalid", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code == ExitUsageError {
 		t.Fatalf("renewal-config-invalid rejected as a --fail-on kind; stderr=%s", stderr.String())
 	}
 }

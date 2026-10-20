@@ -37,7 +37,7 @@ func TestCTGoldenFormats(t *testing.T) {
 	for _, format := range []string{"table", "json", "csv"} {
 		t.Run(format, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := execute([]string{"ct", "Example.COM", "--source", "certspotter", "--format", format}, &stdout, &stderr, dependencies)
+			code := execute(context.Background(), []string{"ct", "Example.COM", "--source", "certspotter", "--format", format}, &stdout, &stderr, dependencies)
 			if code != ExitOK {
 				t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 			}
@@ -66,13 +66,13 @@ func TestCTFallbackAndFailures(t *testing.T) {
 	}))
 	defer server.Close()
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"ct", "example.com", "--format", "json"}, &stdout, &stderr, testCTDependencies(server.URL+"/cert", server.URL+"/crt"))
+	code := execute(context.Background(), []string{"ct", "example.com", "--format", "json"}, &stdout, &stderr, testCTDependencies(server.URL+"/cert", server.URL+"/crt"))
 	if code != ExitOK || !strings.Contains(stderr.String(), "SCD-0003") || !strings.Contains(stderr.String(), "SCD-0007") || !strings.Contains(stdout.String(), `"source":"crtsh"`) {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
-	code = execute([]string{"ct", "example.com"}, &stdout, &stderr, testCTDependencies(server.URL+"/fail", server.URL+"/fail"))
+	code = execute(context.Background(), []string{"ct", "example.com"}, &stdout, &stderr, testCTDependencies(server.URL+"/fail", server.URL+"/fail"))
 	if code != ExitSourceUnavailable || !strings.Contains(stderr.String(), "SCD-0002") {
 		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
 	}
@@ -81,7 +81,7 @@ func TestCTFallbackAndFailures(t *testing.T) {
 func TestCTValidation(t *testing.T) {
 	for _, args := range [][]string{{"ct", "https://example.com"}, {"ct", "example.com", "--format", "xml"}, {"ct", "example.com", "--source", "unknown"}, {"ct", "example.com", "--max-results", "0"}} {
 		var stdout, stderr bytes.Buffer
-		if code := execute(args, &stdout, &stderr, testCTDependencies("x", "x")); code != ExitUsageError || !strings.Contains(stderr.String(), "SCD-0001") {
+		if code := execute(context.Background(), args, &stdout, &stderr, testCTDependencies("x", "x")); code != ExitUsageError || !strings.Contains(stderr.String(), "SCD-0001") {
 			t.Fatalf("args=%v code=%d stderr=%s", args, code, stderr.String())
 		}
 	}
@@ -104,12 +104,12 @@ func TestExitCodeClassification(t *testing.T) {
 	}
 	for _, args := range [][]string{{"ct"}, {"ct", "a", "b"}, {"ct", "example.com", "--bogus"}, {"nosuch"}, {"version", "extra"}} {
 		var stdout, stderr bytes.Buffer
-		if code := execute(args, &stdout, &stderr, testCTDependencies("x", "x")); code != ExitUsageError {
+		if code := execute(context.Background(), args, &stdout, &stderr, testCTDependencies("x", "x")); code != ExitUsageError {
 			t.Errorf("args=%v code=%d", args, code)
 		}
 	}
 	var stdout, stderr bytes.Buffer
-	if code := execute([]string{"ct", "example.com", "--format", "csv"}, &stdout, &stderr, ctDependencies{clock: clock.Fixed{}, sources: map[string]ct.Source{"certspotter": failingSource{}, "crtsh": failingSource{}}}); code != ExitSourceUnavailable {
+	if code := execute(context.Background(), []string{"ct", "example.com", "--format", "csv"}, &stdout, &stderr, ctDependencies{clock: clock.Fixed{}, sources: map[string]ct.Source{"certspotter": failingSource{}, "crtsh": failingSource{}}}); code != ExitSourceUnavailable {
 		t.Errorf("source failure code=%d", code)
 	}
 }

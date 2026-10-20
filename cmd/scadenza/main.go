@@ -8,5 +8,8 @@ import (
 )
 
 func main() {
-	os.Exit(cli.Execute(os.Args[1:], os.Stdout, os.Stderr))
+	ctx, stop := signalContext()
+	code := cli.ExecuteContext(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }

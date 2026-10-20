@@ -61,6 +61,11 @@ func readAzureKeyVault(
 		return state
 	}
 	certificates, problems, scanErr := source.Scan(ctx)
+	if interrupted(ctx) {
+		// The run was stopped by a signal: it reports nothing, so the
+		// cancelled read is not turned into a source problem.
+		return state
+	}
 	for _, problem := range problems {
 		code := azureProblemCode(problem)
 		diagnostics.add(code, "")

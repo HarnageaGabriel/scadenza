@@ -308,15 +308,16 @@ the `1.0` empty ratio never turns a missing check into a pass.
 
 ## Exit codes
 
-The order is **2 usage > 4 all sources unavailable > 3 blocking finding > 5
-incomplete scan > 0**. `4` only when at least one external source (Certificate
-Transparency, Kubernetes, or Azure Key Vault) was requested and every requested
-one was unavailable; a failed TLS probe is a `probe_errors` entry, never exit 4,
-and partial failures are warnings. `3` when a finding of a kind selected by
-`--fail-on` is present. `5` when `--strict` or `--min-coverage` is not met and
-nothing else applies. When `4` or `3` wins, `SCD-0020` is still emitted as a
-warning so an incomplete scan is not hidden. `2` on usage errors. See
-[exit codes](../exit-codes.md).
+The order is **130 interrupted > 2 usage > 4 all sources unavailable > 3 blocking
+finding > 5 incomplete scan > 0**. `4` only when at least one external source
+(Certificate Transparency, Kubernetes, or Azure Key Vault) was requested and
+every requested one was unavailable; a failed TLS probe is a `probe_errors`
+entry, never exit 4, and partial failures are warnings. `3` when a finding of a
+kind selected by `--fail-on` is present. `5` when `--strict` or `--min-coverage`
+is not met and nothing else applies. When `4` or `3` wins, `SCD-0020` is still
+emitted as a warning so an incomplete scan is not hidden. `2` on usage errors.
+`130` when the run is interrupted: the scan stops, writes no document, and
+writes the line `interrupted` to stderr. See [exit codes](../exit-codes.md).
 
 ## Output
 
