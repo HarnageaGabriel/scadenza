@@ -29,7 +29,7 @@ Cert Spotter entries deduplicate by `cert_sha256`. Because crt.sh JSON supplies 
 
 Each certificate also carries a `policy` object computed from `not_before`: the maximum validity in force at issuance, whether the exact lifetime fits it (`compliant_at_issuance`), the next scheduled limit and its effective date, and whether the lifetime fits it. Certificate validity follows the BR section 6.3.2 history: 1186 days before 2018-03-01, 825 days before 2020-09-01, 398 days before 2026-03-15, then 200, 100, and 47 days (SC-081v3); `verdict_100d` is unchanged. See [`scadenza scan`](scan.md#dated-policy).
 
-CSV output prefixes a single quote to any text cell that begins with `=`, `+`, `-`, `@`, tab, or carriage return to prevent spreadsheet formula injection. JSON and table output are unchanged.
+CSV output sanitizes every text cell first: control characters are removed, tabs and line breaks become a single space, and the cell is capped at 256 characters, so a cell never contains a line break. A cell that begins with a formula character (`=`, `+`, `-`, or `@`) is then prefixed with a single quote to prevent spreadsheet formula injection; the guard looks past leading whitespace. JSON and table output are unchanged.
 
 Cert Spotter pagination requires a non-empty cursor that advances on every page and stops after 1000 pages (SCD-0004 otherwise). On HTTP 429 the Retry-After delay (seconds or HTTP-date, clamped to 30s) is honored for one retry, then the source is reported rate-limited (SCD-0003) and fallback applies. Redirects to a different scheme or host are refused. A record whose `not_after` precedes `not_before` fails the source response as malformed (SCD-0004).
 

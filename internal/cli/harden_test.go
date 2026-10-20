@@ -111,8 +111,12 @@ func TestScanDiagnosticsNeutralizeHostileNames(t *testing.T) {
 			if len(lines) == 0 || lines[0] == "" {
 				t.Fatalf("no diagnostic on stderr: %q", stderr.String())
 			}
-			if !strings.Contains(stderr.String(), "SCD-0008") {
-				t.Fatalf("the wildcard diagnostic was not emitted: %q", stderr.String())
+			// A name that fails the host name validation is reported as not
+			// checked instead of as a wildcard. Either way the name is
+			// reported, and no forged line reaches stderr.
+			if !strings.Contains(stderr.String(), "SCD-0008") &&
+				!strings.Contains(stdout.String(), reasonInvalidName) {
+				t.Fatalf("the hostile name was not reported: stderr=%q stdout=%q", stderr.String(), stdout.String())
 			}
 			for _, line := range lines {
 				if !strings.HasPrefix(line, "SCD-") {

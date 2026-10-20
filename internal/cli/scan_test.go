@@ -768,12 +768,46 @@ func TestParseHostsFileStripsBOM(t *testing.T) {
 // configured --port instead of a hardcoded 443.
 func TestDeriveHostsUsesConfiguredPort(t *testing.T) {
 	records := []ct.Certificate{{SubjectNames: []string{"www.example.com", "*.example.com", "other.test"}}}
-	targets, wildcards := deriveHosts(records, []string{"example.com"}, 8443)
+	targets, wildcards, invalid := deriveHosts(records, []string{"example.com"}, 8443)
 	if len(targets) != 1 || targets[0].host != "www.example.com" || targets[0].port != 8443 {
 		t.Fatalf("targets = %+v", targets)
 	}
 	if len(wildcards) != 1 || wildcards[0] != "*.example.com" {
 		t.Fatalf("wildcards = %v", wildcards)
+	}
+	if len(invalid) != 0 {
+		t.Fatalf("invalid = %v", invalid)
+	}
+}
+
+// TestDeriveHostsValidatesCertificateTransparencyNames proves that a name
+// that is not a valid host name is never turned into a probe target, and that
+// the wildcard branch validates its base name too.
+func TestDeriveHostsValidatesCertificateTransparencyNames(t *testing.T) {
+	records := []ct.Certificate{{SubjectNames: []string{
+		"good.example.com",
+		"bad name.example.com",
+		"bad\nname.example.com",
+		"bad\x1b[31m.example.com",
+		"*.*.example.com",
+		"*.\x1b[31m.example.com",
+		"outside.test",
+	}}}
+	targets, wildcards, invalid := deriveHosts(records, []string{"example.com"}, 443)
+	if len(targets) != 1 || targets[0].host != "good.example.com" {
+		t.Fatalf("targets = %+v", targets)
+	}
+	if len(wildcards) != 0 {
+		t.Fatalf("wildcards = %v", wildcards)
+	}
+	want := []string{"*.\x1b[31m.example.com", "*.*.example.com", "bad\nname.example.com", "bad\x1b[31m.example.com", "bad name.example.com"}
+	if len(invalid) != len(want) {
+		t.Fatalf("invalid = %v, want %v", invalid, want)
+	}
+	for index, name := range want {
+		if invalid[index] != name {
+			t.Errorf("invalid[%d] = %q, want %q", index, invalid[index], name)
+		}
 	}
 }
 
