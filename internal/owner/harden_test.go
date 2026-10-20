@@ -42,6 +42,22 @@ func TestParseConfigRejectsALongerOwnerValueInNamespaces(t *testing.T) {
 	}
 }
 
+// TestParseConfigCountsOwnerValueLengthInCharacters pins the owner value
+// limit promise: the MaxOwnerValueLength cap counts characters, not bytes, so
+// a multi-byte owner value of MaxOwnerValueLength characters is accepted and
+// one character more is rejected.
+func TestParseConfigCountsOwnerValueLengthInCharacters(t *testing.T) {
+	// e with an acute accent: one character, two bytes in UTF-8.
+	accepted := strings.Repeat("é", MaxOwnerValueLength)
+	if _, err := ParseConfig([]byte("domains:\n  example.com: " + accepted + "\n")); err != nil {
+		t.Fatalf("ParseConfig() error = %v, want no error for %d characters", err, MaxOwnerValueLength)
+	}
+	rejected := strings.Repeat("é", MaxOwnerValueLength+1)
+	if _, err := ParseConfig([]byte("domains:\n  example.com: " + rejected + "\n")); err == nil {
+		t.Fatalf("expected an error for %d characters", MaxOwnerValueLength+1)
+	}
+}
+
 func TestParseConfigRejectsASecondDocument(t *testing.T) {
 	_, err := ParseConfig([]byte("labelKeys: [scadenza.io/owner]\n---\nlabelKeys: [scadenza.io/owner]\n"))
 	if !errors.Is(err, safefile.ErrMultipleDocuments) {
