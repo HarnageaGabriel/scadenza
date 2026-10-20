@@ -72,6 +72,58 @@ jobs:
       - name: ShellCheck
         run: shellcheck --severity=warning scripts/*.sh
 
+  schema-compat:
+    name: Schema compatibility
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the schema checker
+        run: go build -o "$RUNNER_TEMP/schemadiff" ./tools/schemadiff
+      - name: Find the released schema baseline
+        id: baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A prerelease tag such as v0.0.0-rc.1 is a rehearsal, not a baseline.
+          tag="$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          if [ -z "$tag" ]; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "No released baseline yet: no vMAJOR.MINOR.PATCH tag exists."
+            exit 0
+          fi
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Baseline schema tag: $tag"
+      - name: Compare the published schemas with the baseline
+        if: steps.baseline.outputs.released == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.baseline.outputs.tag }}"
+          status=0
+          for schema in docs/schema/ct-v1.schema.json docs/schema/scan-v1.schema.json; do
+            if ! git cat-file -e "$tag:$schema" 2>/dev/null; then
+              echo "$schema is not in $tag; there is nothing to compare."
+              continue
+            fi
+            old="$RUNNER_TEMP/$(basename "$schema")"
+            git show "$tag:$schema" > "$old"
+            echo "Comparing $schema against $tag"
+            if ! "$RUNNER_TEMP/schemadiff" "$old" "$schema"; then
+              status=1
+            fi
+          done
+          exit "$status"
+
   security:
     name: Vulnerability scan
     runs-on: ubuntu-latest
