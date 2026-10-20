@@ -105,6 +105,22 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 			}
 			return stdout.Bytes()
 		}},
+		{"scan blocked address probe error", "scan-v1.schema.json", func(t *testing.T) []byte {
+			// A Certificate Transparency derived host that resolves to the
+			// loopback address is never dialed; the refusal is a probe error
+			// with the blocked-address class.
+			server := certSpotterServer(t, blockedAddressFixture())
+			prober := &tlsprobe.Prober{Timeout: 3 * time.Second, Dialer: &recordingDialer{}, Resolver: fakeResolver{addresses: map[string]string{
+				"example.com":          "192.0.2.1",
+				"loopback.example.com": "127.0.0.1",
+			}}}
+			var stdout, stderr bytes.Buffer
+			execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
+			if !strings.Contains(stdout.String(), `"class":"blocked-address"`) {
+				t.Fatalf("no blocked-address probe error: %s", stdout.String())
+			}
+			return stdout.Bytes()
+		}},
 	}
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -117,6 +133,12 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 			validateAgainstSchema(t, "$", schema, document)
 		})
 	}
+}
+
+// blockedAddressFixture is one Certificate Transparency record whose name
+// resolves to a loopback address.
+func blockedAddressFixture() string {
+	return fmt.Sprintf(`[{"id":"1","cert_sha256":"%s","dns_names":["loopback.example.com"],"issuer":{"name":"CN=Example Root"},"not_before":"2026-01-01T00:00:00Z","not_after":"2026-04-01T00:00:00Z","revoked":false}]`, strings.Repeat("a", 64))
 }
 
 func TestSchemaValidatorRejectsNullArrays(t *testing.T) {

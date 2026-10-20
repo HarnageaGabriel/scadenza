@@ -56,7 +56,22 @@ type ctSourceStats struct {
 	attempted int
 	succeeded int
 	failed    int
+	// truncated records that a query stopped at the entry cap, so the source
+	// is reported as partial instead of complete.
+	truncated bool
 }
+
+// Reasons a name is listed as unresolved, that is, as deliberately not
+// probed.
+const (
+	// reasonWildcard marks a wildcard name, which covers no single host.
+	reasonWildcard = "wildcard"
+	// reasonHostCap marks a derived host dropped by the --max-hosts cap.
+	reasonHostCap = "host-cap"
+	// reasonInvalidName marks a Certificate Transparency name that is not a
+	// valid host name, so it was never probed.
+	reasonInvalidName = "invalid-name"
+)
 
 type diagnosticSet struct {
 	seen  map[string]bool
@@ -172,11 +187,16 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			}
 			// Explicitly named targets are never displaced by --max-hosts, so
 			// they are kept first and the cap only ever trims derived hosts.
-			targets := dedupeTargets(explicitTargets)
+			namedTargets := dedupeTargets(explicitTargets)
 			explicitNames := map[string]bool{}
-			for _, target := range targets {
+			for _, target := range namedTargets {
 				explicitNames[targetKey(target)] = true
 			}
+			// targets holds every target of the run, named ones first.
+			targets := append([]probeTarget{}, namedTargets...)
+			// derivedTargets holds the hosts that came from Certificate
+			// Transparency; they are probed with the special-address guard.
+			var derivedTargets []probeTarget
 			chosen, err := resolveSources(sourceNames, dependencies.sources)
 			if err != nil {
 				emitDiagnostic(stderr, "SCD-0001", err.Error())
@@ -249,10 +269,18 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 						name := source.Name()
 						stats := ctStats[name]
 						stats.attempted++
-						found, searchErr := source.Search(command.Context(), ct.Query{Domain: domain, IncludeSubdomains: true, Now: now})
+						found, truncated, searchErr := searchCT(command.Context(), source, ct.Query{Domain: domain, IncludeSubdomains: true, Now: now})
 						if searchErr == nil {
 							stats.succeeded++
+							firstTruncation := truncated && !stats.truncated
+							stats.truncated = stats.truncated || truncated
 							ctStats[name] = stats
+							if firstTruncation {
+								// The query stopped at the entry cap, so the
+								// result is incomplete and the source is partial.
+								diagnostics.add("SCD-0034", name)
+								emitDiagnostic(stderr, "SCD-0034", name+" stopped at the "+strconv.Itoa(ct.MaxEntries)+"-entry cap")
+							}
 							// Record the fallback only now that the next source
 							// actually answered; a failed fallback is not a fallback.
 							if len(failed) > 0 {
@@ -273,7 +301,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 						failed = append(failed, name)
 					}
 				}
-				derived, wildcards := deriveHosts(records, normalizedDomains, port)
+				derived, wildcards, invalid := deriveHosts(records, normalizedDomains, port)
 				available := make([]probeTarget, 0, len(derived))
 				for _, target := range dedupeTargets(derived) {
 					if !explicitNames[targetKey(target)] {
@@ -282,17 +310,24 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				}
 				if len(available) > maxHosts {
 					for _, target := range available[maxHosts:] {
-						unprobed[targetKey(target)] = "host-cap"
+						unprobed[targetKey(target)] = reasonHostCap
 					}
 					diagnostics.add("SCD-0009", fmt.Sprint(maxHosts))
 					emitDiagnostic(stderr, "SCD-0009", strconv.Itoa(maxHosts))
 					available = available[:maxHosts]
 				}
+				derivedTargets = available
 				targets = append(targets, available...)
 				for _, name := range wildcards {
-					unprobed[name] = "wildcard"
+					unprobed[name] = reasonWildcard
 					diagnostics.add("SCD-0008", name)
 					emitDiagnostic(stderr, "SCD-0008", name)
+				}
+				for _, name := range invalid {
+					// The name is not a valid host name, so it was never
+					// probed. It is reported as not checked instead of being
+					// dropped silently.
+					unprobed[name] = reasonInvalidName
 				}
 			}
 
@@ -306,7 +341,25 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				clone.Clock = evaluationClock
 				prober = &clone
 			}
-			live, probeErrors, probed := runProbes(command.Context(), prober, targets, concurrency)
+			// A host name that comes from Certificate Transparency is
+			// untrusted: it can resolve to a loopback or a cloud metadata
+			// address. It is probed with the special-address guard, while a
+			// host the user named is not restricted. The guarded prober is a
+			// separate value, so no shared state is mutated while probes run.
+			guardedProber := prober
+			if concrete, ok := prober.(*tlsprobe.Prober); ok {
+				guarded := *concrete
+				guarded.BlockSpecialAddresses = true
+				guardedProber = &guarded
+			}
+			jobs := make([]probeJob, 0, len(targets))
+			for _, target := range namedTargets {
+				jobs = append(jobs, probeJob{target: target, prober: prober})
+			}
+			for _, target := range derivedTargets {
+				jobs = append(jobs, probeJob{target: target, prober: guardedProber})
+			}
+			live, probeErrors, probed := runProbeJobs(command.Context(), jobs, concurrency)
 			for _, probeError := range probeErrors {
 				diagnostics.add("SCD-0010", probeError.Host)
 				emitDiagnostic(stderr, "SCD-0010", probeError.Host+":"+strconv.Itoa(probeError.Port)+" "+probeError.Class)
@@ -359,10 +412,15 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			unresolved := make([]inventory.Unresolved, 0, len(unprobed))
 			for name, reason := range unprobed {
 				detail := "wildcard name is never probed"
-				if reason == "host-cap" {
+				switch reason {
+				case reasonHostCap:
 					detail = "beyond --max-hosts; increase the cap to probe it"
+				case reasonInvalidName:
+					// The reason never echoes the untrusted name raw: the
+					// sanitized form is the only text it carries.
+					detail = "the Certificate Transparency name is not a valid host name: " + render.SafeText(name)
 				}
-				unresolved = append(unresolved, inventory.Unresolved{Name: name, Reason: reason, Detail: detail})
+				unresolved = append(unresolved, inventory.Unresolved{Name: render.SafeText(name), Reason: reason, Detail: detail})
 			}
 			sort.SliceStable(unresolved, func(i, j int) bool { return unresolved[i].Name < unresolved[j].Name })
 
@@ -376,7 +434,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			// against the ratio; wildcards are never probeable and stay out.
 			capped := 0
 			for _, reason := range unprobed {
-				if reason == "host-cap" {
+				if reason == reasonHostCap {
 					capped++
 				}
 			}
@@ -506,6 +564,14 @@ func coverageSources(ctRequested bool, chosen []ct.Source, ctStats map[string]ct
 				switch {
 				case !attempted:
 					entry.Detail = "not needed: earlier source answered"
+				case stats.truncated:
+					// The query stopped at the entry cap, so the source
+					// answered with an incomplete result.
+					entry.Status = inventory.SourceStatusPartial
+					entry.Detail = fmt.Sprintf("the result stopped at the %d-entry cap", ct.MaxEntries)
+					if stats.failed > 0 {
+						entry.Detail += fmt.Sprintf("; %d attempt(s) failed", stats.failed)
+					}
 				case stats.failed > 0 && stats.succeeded > 0:
 					entry.Status = inventory.SourceStatusPartial
 					entry.Detail = fmt.Sprintf("%d succeeded, %d failed", stats.succeeded, stats.failed)
@@ -849,9 +915,18 @@ func parseTargets(values []string, defaultPort int) ([]probeTarget, error) {
 	return result, nil
 }
 
-func deriveHosts(records []ct.Certificate, domains []string, defaultPort int) ([]probeTarget, []string) {
+// deriveHosts turns the Certificate Transparency subject names under the
+// scanned domains into probe targets. It returns the probe targets, the
+// wildcard names that are never probed, and the names that are not valid host
+// names and are therefore reported as not checked.
+//
+// A name is validated with the same parser that validates the hosts the user
+// types, including in the wildcard branch: a wildcard is never probed, but it
+// is still reported, so it must not carry a control character either.
+func deriveHosts(records []ct.Certificate, domains []string, defaultPort int) ([]probeTarget, []string, []string) {
 	targets := map[string]probeTarget{}
 	wildcards := map[string]bool{}
+	invalid := map[string]bool{}
 	for _, record := range records {
 		for _, raw := range record.SubjectNames {
 			name := strings.ToLower(strings.TrimSpace(raw))
@@ -860,9 +935,15 @@ func deriveHosts(records []ct.Certificate, domains []string, defaultPort int) ([
 				continue
 			}
 			if strings.Contains(name, "*") {
-				if underAnyDomain(strings.TrimPrefix(name, "*."), domains) {
-					wildcards[name] = true
+				base := strings.TrimPrefix(name, "*.")
+				if !underAnyDomain(base, domains) {
+					continue
 				}
+				if _, _, err := tlsprobe.ParseEndpoint(base, defaultPort); err != nil {
+					invalid[name] = true
+					continue
+				}
+				wildcards[name] = true
 				continue
 			}
 			if !underAnyDomain(name, domains) {
@@ -870,6 +951,7 @@ func deriveHosts(records []ct.Certificate, domains []string, defaultPort int) ([
 			}
 			host, targetPort, err := tlsprobe.ParseEndpoint(name, defaultPort)
 			if err != nil {
+				invalid[name] = true
 				continue
 			}
 			targets[host+":"+strconv.Itoa(targetPort)] = probeTarget{host: host, port: targetPort}
@@ -885,7 +967,12 @@ func deriveHosts(records []ct.Certificate, domains []string, defaultPort int) ([
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return result, names
+	invalidNames := make([]string, 0, len(invalid))
+	for name := range invalid {
+		invalidNames = append(invalidNames, name)
+	}
+	sort.Strings(invalidNames)
+	return result, names, invalidNames
 }
 
 func underAnyDomain(name string, domains []string) bool {
@@ -919,25 +1006,47 @@ func sortTargets(targets []probeTarget) {
 	})
 }
 
-// runProbes probes every target with bounded concurrency, keeping results and
-// errors in target order so output stays deterministic.
-func runProbes(ctx context.Context, prober hostProber, targets []probeTarget, concurrency int) ([]tlsprobe.Result, []inventory.ProbeError, int) {
-	results := make([]tlsprobe.Result, len(targets))
-	failures := make([]inventory.ProbeError, len(targets))
-	ok := make([]bool, len(targets))
+// searchCT queries one Certificate Transparency source and reports whether
+// the result stopped at the entry cap. A source that can report truncation is
+// queried through ct.TruncatingSource; every other source keeps the plain
+// search path and never reports truncation.
+func searchCT(ctx context.Context, source ct.Source, query ct.Query) ([]ct.Certificate, bool, error) {
+	if truncating, ok := source.(ct.TruncatingSource); ok {
+		result, err := truncating.SearchResult(ctx, query)
+		return result.Certificates, result.Truncated, err
+	}
+	certificates, err := source.Search(ctx, query)
+	return certificates, false, err
+}
+
+// probeJob pairs a target with the prober that must dial it, so a host that
+// came from Certificate Transparency can be probed with the special-address
+// guard while a host the user named is not restricted.
+type probeJob struct {
+	target probeTarget
+	prober hostProber
+}
+
+// runProbeJobs probes every job with bounded concurrency, keeping results and
+// errors in job order so output stays deterministic.
+func runProbeJobs(ctx context.Context, jobs []probeJob, concurrency int) ([]tlsprobe.Result, []inventory.ProbeError, int) {
+	results := make([]tlsprobe.Result, len(jobs))
+	failures := make([]inventory.ProbeError, len(jobs))
+	ok := make([]bool, len(jobs))
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(concurrency)
-	for index := range targets {
+	for index := range jobs {
 		index := index
 		group.Go(func() error {
-			result, err := prober.Probe(groupCtx, targets[index].host, targets[index].port, "")
+			job := jobs[index]
+			result, err := job.prober.Probe(groupCtx, job.target.host, job.target.port, "")
 			if err != nil {
 				class := tlsprobe.ClassHandshakeFailed
 				var probeErr *tlsprobe.Error
 				if errors.As(err, &probeErr) {
 					class = probeErr.Class
 				}
-				failures[index] = inventory.ProbeError{Host: targets[index].host, Port: targets[index].port, Class: string(class), Detail: err.Error()}
+				failures[index] = inventory.ProbeError{Host: job.target.host, Port: job.target.port, Class: string(class), Detail: err.Error()}
 				return nil
 			}
 			results[index] = result
@@ -947,10 +1056,10 @@ func runProbes(ctx context.Context, prober hostProber, targets []probeTarget, co
 	}
 	_ = group.Wait()
 
-	live := make([]tlsprobe.Result, 0, len(targets))
-	probeErrors := make([]inventory.ProbeError, 0, len(targets))
+	live := make([]tlsprobe.Result, 0, len(jobs))
+	probeErrors := make([]inventory.ProbeError, 0, len(jobs))
 	successes := 0
-	for index := range targets {
+	for index := range jobs {
 		if ok[index] {
 			live = append(live, results[index])
 			successes++

@@ -31,6 +31,41 @@ targets (`--host`, `--hosts-file`, and `--domain`) are always probed; the
 derived names are listed in `unresolved` with reason `host-cap` and reported as
 `SCD-0009`; the remaining hosts are simply not probed.
 
+A Certificate Transparency name is validated with the same parser that
+validates the host names you type. A name that fails that validation (a
+newline, an escape sequence, a space, or any other character that is not
+allowed in a host name) is never probed and never becomes a probe target. It
+is listed in `unresolved` with reason `invalid-name`, it counts as a name that
+was not checked, and the reason text never echoes the name raw.
+
+### The special-address guard
+
+A host name that comes from Certificate Transparency is untrusted: it can
+resolve to a loopback address or to the cloud metadata address
+`169.254.169.254`. Every such host is therefore resolved and checked before
+it is dialed, and a host whose addresses are all loopback, link-local
+(unicast or multicast), multicast, unspecified, or in `0.0.0.0/8` (including
+the IPv4-mapped and IPv4-compatible IPv6 forms of each) is **not** dialed at
+all. The refusal is a normal probe failure: it appears in `probe_errors` with
+the class `blocked-address`, it is counted as a failed target in `coverage`,
+it is reported as `SCD-0010`, and it is never dropped silently. The IPv6
+unique local range and the RFC 1918 ranges (`10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`) are **not** blocked, so an internal estate stays scannable.
+
+The hosts you name yourself (`--host`, `--hosts-file`) and the domain you scan
+are explicitly named targets, so they are not restricted: they are probed
+exactly as before, and you can still scan a host that resolves to a private or
+loopback address on purpose. Only the hosts that Certificate Transparency
+contributed are guarded.
+
+## Certificate Transparency limits
+
+A Certificate Transparency query collects at most 50000 entries. When a source
+reaches that cap the result stops there, the source is reported as `partial` in
+`coverage` with the detail `the result stopped at the 50000-entry cap`, and
+one `SCD-0034` warning is written to stderr. A partial source is treated like
+any other partial source, so `--strict` fails the scan (exit 5).
+
 ## Options
 
 - `--domain name` selects a domain to query in CT and to probe. Repeatable.
@@ -290,9 +325,31 @@ JSON follows [`scadenza.scan/v1`](../schema/scan-v1.schema.json) and contains
 `findings`, `unresolved`, `probe_errors`, `diagnostics`, `owners`, and
 `coverage`. The table prints the certificates (with `MODE` and `HEALTH`), the
 findings summary, a `RISKS` summary when any certificate has a risk, and the
-one-line coverage summary. CSV emits one row per (certificate, observation) and
-reuses the `scadenza ct` formula-injection escaping (a leading single quote for
-cells starting with `=`, `+`, `-`, `@`, tab, or carriage return).
+one-line coverage summary. CSV emits one row per (certificate, observation).
+
+### Untrusted text
+
+Everything that came from a source scadenza does not control (a Certificate
+Transparency name, a certificate field, a Kubernetes label, a Key Vault tag) is
+sanitized before it is displayed:
+
+- A diagnostic line on stderr reads `SCD-<code> [<severity>] <summary>` and
+  then `: <detail>` when there is a detail. The code comes first, so an
+  untrusted detail is never the first thing on a line. The detail is
+  sanitized: control and format characters (including bidirectional overrides
+  and zero width characters) are removed, tabs and line breaks become a single
+  space, and the detail is capped at 512 characters.
+- A table cell and a CSV cell are sanitized the same way and are capped at 256
+  characters.
+- A CSV cell never contains a line break, so a record is always exactly one
+  physical line. A cell that starts with a formula character (`=`, `+`, `-`, or
+  `@`) is prefixed with a single quote, so a spreadsheet cannot evaluate it;
+  the guard looks past leading whitespace, so a cell that starts with spaces
+  before a formula character is guarded as well.
+- The name and the reason text of an `unresolved` entry are sanitized too,
+  because a Certificate Transparency name that failed the host name validation
+  is untrusted text. The rest of the JSON is data, not display: it carries the
+  exact values a consumer reads back and is never truncated.
 
 The certificate object gains `correlation_method`, `policy`, and `renewal`
 (`mode`, `health`, `evidence`, `risks`). The document gains `coverage` and the
