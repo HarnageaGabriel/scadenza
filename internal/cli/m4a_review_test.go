@@ -169,7 +169,7 @@ func TestMaskedIncompleteScanEmitsWarningSCD0020(t *testing.T) {
 			!strings.Contains(stdout.String(), `"severity":"warning"`) {
 			t.Fatalf("document missing warning SCD-0020: %s", stdout.String())
 		}
-		if !strings.Contains(stderr.String(), "warning [SCD-0020]") {
+		if !strings.Contains(stderr.String(), "SCD-0020 [warning]") {
 			t.Fatalf("stderr missing warning SCD-0020: %s", stderr.String())
 		}
 	})
@@ -189,7 +189,7 @@ func TestMaskedIncompleteScanEmitsWarningSCD0020(t *testing.T) {
 			t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 		}
 		if !strings.Contains(stdout.String(), `"code":"SCD-0020"`) ||
-			!strings.Contains(stderr.String(), "warning [SCD-0020]") {
+			!strings.Contains(stderr.String(), "SCD-0020 [warning]") {
 			t.Fatalf("missing warning SCD-0020: stdout=%s stderr=%s", stdout.String(), stderr.String())
 		}
 	})
