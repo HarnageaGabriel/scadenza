@@ -7,6 +7,7 @@ package inventory
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/HarnageaGabriel/scadenza/internal/policy"
 	"github.com/HarnageaGabriel/scadenza/internal/renewal"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
+	"golang.org/x/net/idna"
 )
 
 // Diff kinds reported as findings. They are stable identifiers.
@@ -166,6 +168,12 @@ type accumulator struct {
 	owners       map[string]owner.Owner
 	observations map[string]Observation
 	method       string
+	// ambiguous counts the certificates that share the names and the expiry of
+	// an unresolved Kubernetes record, and ambiguousCT counts the Certificate
+	// Transparency certificates among them. Both are zero unless the weak
+	// join matched more than one certificate.
+	ambiguous   int
+	ambiguousCT int
 }
 
 // Correlate merges CT issuances and live observations and returns the sorted
@@ -178,25 +186,13 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 
 	live := append([]tlsprobe.Result(nil), in.Live...)
 	sort.SliceStable(live, func(i, j int) bool { return lessLive(live[i], live[j]) })
-	serialIndex := map[string]string{}
 	for _, result := range live {
-		if result.Fingerprint == "" {
+		fingerprint := normalizeFingerprint(result.Fingerprint)
+		if fingerprint == "" {
 			continue
 		}
-		if result.Serial != "" {
-			key := issuerKey(result.Issuer, result.Serial)
-			if _, ok := serialIndex[key]; !ok {
-				serialIndex[key] = result.Fingerprint
-			}
-		}
-	}
-
-	for _, result := range live {
-		if result.Fingerprint == "" {
-			continue
-		}
-		key := "fp:" + result.Fingerprint
-		entry := ensure(accumulated, &order, key, result.Fingerprint)
+		key := "fp:" + fingerprint
+		entry := ensure(accumulated, &order, key, fingerprint)
 		entry.setMethod(CorrelationSHA256)
 		entry.hasLive = true
 		entry.trustChecked = true
@@ -206,7 +202,9 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 			entry.anyUntrusted = true
 		}
 		for _, name := range result.Names {
-			entry.names[name] = true
+			if normalized := normalizeName(name); normalized != "" {
+				entry.names[normalized] = true
+			}
 		}
 		entry.certificate.Issuer = result.Issuer
 		entry.certificate.NotBefore = result.NotBefore
@@ -221,28 +219,40 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		}
 	}
 
+	// A serial number is not unique: the same issuer can issue several
+	// certificates with the same serial number, so the index keeps every live
+	// entry that carries the pair. Only an unambiguous match is merged.
+	serialIndex := map[string][]string{}
+	for _, result := range live {
+		if result.Fingerprint == "" || result.Serial == "" {
+			continue
+		}
+		key := issuerKey(result.Issuer, result.Serial)
+		entryKey := "fp:" + normalizeFingerprint(result.Fingerprint)
+		if !slices.Contains(serialIndex[key], entryKey) {
+			serialIndex[key] = append(serialIndex[key], entryKey)
+		}
+	}
+
 	certificates := append([]ct.Certificate(nil), in.CT...)
 	sort.SliceStable(certificates, func(i, j int) bool { return lessCT(certificates[i], certificates[j]) })
 	for _, record := range certificates {
 		key := "ct:" + record.DedupKey
-		fingerprint := record.Fingerprint
-		if fingerprint != "" {
-			key = "fp:" + fingerprint
+		fingerprint := ""
+		method := CorrelationUnresolved
+		if candidate := normalizeFingerprint(record.Fingerprint); candidate != "" {
+			fingerprint = candidate
+			key = "fp:" + candidate
+			method = CorrelationSHA256
 		} else if record.Serial != "" {
-			if matched, ok := serialIndex[issuerKey(record.Issuer, record.Serial)]; ok {
+			if matched, ok := matchIssuerSerial(accumulated, serialIndex, record); ok {
 				fingerprint = matched
 				key = "fp:" + matched
+				method = CorrelationIssuerSerial
 			}
 		}
 		entry := ensure(accumulated, &order, key, fingerprint)
-		switch {
-		case record.Fingerprint != "":
-			entry.setMethod(CorrelationSHA256)
-		case fingerprint != "":
-			entry.setMethod(CorrelationIssuerSerial)
-		default:
-			entry.setMethod(CorrelationUnresolved)
-		}
+		entry.setMethod(method)
 		entry.hasCT = true
 		for _, name := range record.SubjectNames {
 			name = normalizeName(name)
@@ -285,11 +295,12 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 	})
 	for _, record := range azureRecords {
 		key := "azurekv:" + record.Facts.Vault + "/" + record.Facts.Name + "/" + record.Facts.Version
-		if record.Fingerprint != "" {
-			key = "fp:" + record.Fingerprint
+		fingerprint := normalizeFingerprint(record.Fingerprint)
+		if fingerprint != "" {
+			key = "fp:" + fingerprint
 		}
-		entry := ensure(accumulated, &order, key, record.Fingerprint)
-		if record.Fingerprint != "" {
+		entry := ensure(accumulated, &order, key, fingerprint)
+		if fingerprint != "" {
 			entry.setMethod(CorrelationSHA256)
 		} else {
 			entry.setMethod(CorrelationUnresolved)
@@ -338,6 +349,7 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		// through metadata only, are still reported with their owner signals.
 		if !record.NotAfter.IsZero() && len(record.Names) > 0 {
 			matches := []string{}
+			certificateTransparency := 0
 			for key, entry := range accumulated {
 				if (!entry.hasCT && !entry.hasLive) ||
 					entry.certificate.NotAfter.IsZero() ||
@@ -346,10 +358,25 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 					continue
 				}
 				matches = append(matches, key)
+				if entry.hasCT {
+					certificateTransparency++
+				}
 			}
 			if len(matches) == 1 {
 				entry := accumulated[matches[0]]
 				entry.method = CorrelationNamesExpiry
+				addKubeRecord(entry, record)
+				continue
+			}
+			if len(matches) > 1 {
+				// More than one certificate shares the names and the expiry, so
+				// the record cannot be matched to one of them. It stays
+				// unresolved and is never accused of being absent from
+				// Certificate Transparency.
+				entry := ensure(accumulated, &order, "kube:"+record.DedupKey, "")
+				entry.setMethod(CorrelationUnresolved)
+				entry.ambiguous = len(matches)
+				entry.ambiguousCT = certificateTransparency
 				addKubeRecord(entry, record)
 				continue
 			}
@@ -359,11 +386,12 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		addKubeRecord(entry, record)
 	}
 	for _, record := range kubeRecords {
-		if record.Fingerprint == "" {
+		fingerprint := normalizeFingerprint(record.Fingerprint)
+		if fingerprint == "" {
 			continue
 		}
-		key := "fp:" + record.Fingerprint
-		entry := ensure(accumulated, &order, key, record.Fingerprint)
+		key := "fp:" + fingerprint
+		entry := ensure(accumulated, &order, key, fingerprint)
 		entry.setMethod(CorrelationSHA256)
 		addKubeRecord(entry, record)
 	}
@@ -524,6 +552,20 @@ func (lookup stateLookup) state(name string) string {
 
 func classify(entry *accumulator, lookup stateLookup, domains []string, certificate Certificate, now time.Time) (string, string) {
 	switch {
+	case entry.ambiguous > 0:
+		// The weak join matched more than one certificate, so the record is
+		// unknown, not absent: it is never accused of not being in Certificate
+		// Transparency.
+		if entry.ambiguousCT == entry.ambiguous {
+			return KindUnknown, fmt.Sprintf(
+				"the Kubernetes certificate could not be matched to one Certificate Transparency certificate because %d share its names and expiry",
+				entry.ambiguous,
+			)
+		}
+		return KindUnknown, fmt.Sprintf(
+			"the Kubernetes certificate could not be matched to one certificate because %d share its names and expiry",
+			entry.ambiguous,
+		)
 	case !entry.hasCT && !entry.hasLive && entry.hasKube:
 		return KindKubeOnly, "read from Kubernetes and not observed in Certificate Transparency or a live handshake"
 	case entry.hasCT && entry.hasLive:
@@ -574,7 +616,54 @@ func inScope(name string, domains []string) bool {
 		return false
 	}
 	for _, domain := range domains {
-		if base == domain || strings.HasSuffix(base, "."+domain) {
+		normalized := normalizeDomain(domain)
+		if normalized == "" {
+			continue
+		}
+		if base == normalized || strings.HasSuffix(base, "."+normalized) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchIssuerSerial finds the one live entry that a Certificate Transparency
+// record without a fingerprint can be merged into.
+//
+// The issuer and the serial number alone do not identify a certificate: the
+// same issuer can issue several certificates with the same serial number, so
+// the record must also share at least one name with the entry. When several
+// entries share a name with the record, or none does, nothing is merged and
+// the record keeps its own entry.
+func matchIssuerSerial(accumulated map[string]*accumulator, serialIndex map[string][]string, record ct.Certificate) (string, bool) {
+	candidates := serialIndex[issuerKey(record.Issuer, record.Serial)]
+	if len(candidates) == 0 {
+		return "", false
+	}
+	names := map[string]bool{}
+	for _, name := range record.SubjectNames {
+		if normalized := normalizeName(name); normalized != "" {
+			names[normalized] = true
+		}
+	}
+	matches := []string{}
+	for _, candidate := range candidates {
+		entry, ok := accumulated[candidate]
+		if !ok || !sharesName(entry.names, names) {
+			continue
+		}
+		matches = append(matches, candidate)
+	}
+	if len(matches) != 1 {
+		return "", false
+	}
+	return accumulated[matches[0]].certificate.Fingerprint, true
+}
+
+// sharesName reports whether two name sets have a name in common.
+func sharesName(left, right map[string]bool) bool {
+	for name := range left {
+		if right[name] {
 			return true
 		}
 	}
@@ -631,9 +720,41 @@ func validLifetime(notBefore, notAfter time.Time) bool {
 
 func nonComplianceDetail(certificate Certificate) string {
 	return fmt.Sprintf(
-		"lifetime %d days exceeds the %d-day maximum validity in force at issuance",
-		certificate.LifetimeDays, certificate.Policy.MaxValidityAtIssuanceDays,
+		"lifetime %s exceeds the %d-day maximum validity in force at issuance",
+		lifetimeText(certificate),
+		certificate.Policy.MaxValidityAtIssuanceDays,
 	)
+}
+
+// lifetimeText renders a lifetime as whole days plus the remainder, so a
+// lifetime of 100 days and one second never reads as exactly 100 days.
+func lifetimeText(certificate Certificate) string {
+	duration := certificate.NotAfter.Sub(certificate.NotBefore)
+	days := int(duration / (24 * time.Hour))
+	remainder := duration - time.Duration(days)*24*time.Hour
+	if remainder <= 0 {
+		return fmt.Sprintf("%d days", days)
+	}
+	return fmt.Sprintf("%d days and %s", days, remainderText(remainder))
+}
+
+// remainderText renders the part of a lifetime that is not a whole day.
+func remainderText(remainder time.Duration) string {
+	seconds := int(remainder / time.Second)
+	switch {
+	case seconds <= 0:
+		return fmt.Sprintf("%d milliseconds", int(remainder/time.Millisecond))
+	case seconds == 1:
+		return "1 second"
+	case seconds < 60:
+		return fmt.Sprintf("%d seconds", seconds)
+	case seconds%60 == 0 && seconds < 3600:
+		return fmt.Sprintf("%d minutes", seconds/60)
+	case seconds%3600 == 0:
+		return fmt.Sprintf("%d hours", seconds/3600)
+	default:
+		return fmt.Sprintf("%d seconds", seconds)
+	}
 }
 
 func ensure(accumulated map[string]*accumulator, order *[]string, key, fingerprint string) *accumulator {
@@ -747,8 +868,14 @@ func renewalInput(certificate Certificate, in Input) renewal.Input {
 		}
 	}
 	for _, record := range in.CT {
+		names := make([]string, 0, len(record.SubjectNames))
+		for _, name := range record.SubjectNames {
+			if normalized := normalizeName(name); normalized != "" {
+				names = append(names, normalized)
+			}
+		}
 		input.CT = append(input.CT, renewal.Issuance{
-			Names:       record.SubjectNames,
+			Names:       names,
 			NotBefore:   record.NotBefore,
 			Issuer:      record.Issuer,
 			Fingerprint: record.Fingerprint,
@@ -765,27 +892,94 @@ func declaredRenewalMode(names []string, modes map[string]string) string {
 	if len(modes) == 0 {
 		return ""
 	}
-	best, value := "", ""
+	bestKey, bestDomain, value := "", "", ""
 	for _, name := range names {
-		normalized := owner.NormalizeDomain(name)
+		normalized := normalizeDomain(name)
 		if normalized == "" {
 			continue
 		}
 		for domain, mode := range modes {
-			if normalized != domain && !strings.HasSuffix(normalized, "."+domain) {
+			key := normalizeDomain(domain)
+			if key == "" || (normalized != key && !strings.HasSuffix(normalized, "."+key)) {
 				continue
 			}
-			if len(domain) > len(best) || (len(domain) == len(best) && domain < best) {
-				best, value = domain, mode
+			if len(key) > len(bestKey) || (len(key) == len(bestKey) && domain < bestDomain) {
+				bestKey, bestDomain, value = key, domain, mode
 			}
 		}
 	}
 	return value
 }
 
+// normalizeName reduces a name to the canonical form used as a correlation key
+// and reported in the output: lowercase, without the trailing dot, and with
+// every Unicode label folded to its ASCII punycode form.
+//
+// The folding uses the same IDNA profile as the Certificate Transparency
+// source, so a name written in Unicode in one source and in punycode in another
+// is one name. A name that cannot be converted keeps its lowercased trimmed
+// text, so nothing is ever dropped from the report.
 func normalizeName(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	return strings.TrimSuffix(value, ".")
+	value = strings.TrimSuffix(value, ".")
+	if value == "" {
+		return ""
+	}
+	prefix := ""
+	if rest, ok := strings.CutPrefix(value, "*."); ok {
+		// A wildcard label is not a valid IDNA label, so only the domain it
+		// covers is converted.
+		prefix = "*."
+		value = rest
+	}
+	folded, ok := toASCII(value)
+	if !ok {
+		return prefix + value
+	}
+	return prefix + folded
+}
+
+// normalizeDomain folds a domain to the same canonical form the certificate
+// names use, so a configured domain and a certificate name turn into the same
+// key.
+func normalizeDomain(value string) string {
+	return normalizeName(owner.NormalizeDomain(value))
+}
+
+// toASCII folds a name to its ASCII form with the IDNA profile the Certificate
+// Transparency source uses. ok is false when the name cannot be converted.
+func toASCII(value string) (string, bool) {
+	if isASCII(value) {
+		return value, true
+	}
+	ascii, err := idna.Lookup.ToASCII(value)
+	if err != nil {
+		return "", false
+	}
+	return strings.ToLower(ascii), true
+}
+
+// isASCII reports whether the value holds ASCII bytes only.
+func isASCII(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeFingerprint reduces a SHA-256 fingerprint to the canonical form used
+// as a correlation key and reported in the output: lowercase hexadecimal with
+// the colons, the spaces and the 0x prefix removed. The sources write the
+// fingerprint differently, and the same certificate must stay one certificate
+// whichever way it was written.
+func normalizeFingerprint(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, ":", "")
+	value = strings.ReplaceAll(value, " ", "")
+	value = strings.TrimPrefix(value, "0x")
+	return value
 }
 
 func location(host string, port int) string { return host + ":" + strconv.Itoa(port) }
