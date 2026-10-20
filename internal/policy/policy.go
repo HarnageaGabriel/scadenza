@@ -9,14 +9,24 @@ import "time"
 // Effective dates of the SC-081 validity and DCV-reuse steps.
 //
 // Source: CA/Browser Forum Baseline Requirements, SC-081v3 (adopted 2025),
-// which schedules a maximum certificate validity and a maximum DCV reuse of
-// 200 days from 2026-03-15, 100 days from 2027-03-15, and 47/10 days from
-// 2029-03-15. Certificate validity before 2026 follows the BR section 6.3.2
-// history: 39 months (modeled as 1186 days) through 2018-02-28, 825 days
-// through 2020-08-31, then 398 days through 2026-03-14. DCV reuse remains
-// 398 days before the 2026 step (BR 4.2.1).
-// VERIFY: confirm the dated BR section 6.3.2 validity history, the 39-month
-// day count, and every effective date against the published BR change history.
+// codified in version 2.3.1 (4 October 2026). Confirmed on 2026-10-20:
+// section 6.3.2 caps the validity of a Subscriber Certificate at 398 days
+// before 2026-03-15, 200 days from 2026-03-15, 100 days from 2027-03-15 and
+// 47 days from 2029-03-15, and that cap applies by issuance date. Section
+// 4.2.1 allows domain name and IP address validation to be reused for 398
+// days before 2026-03-15, 200 days from 2026-03-15, 100 days from
+// 2027-03-15 and 10 days from 2029-03-15, and allows subject identity
+// information to be reused for 398 days from 2026-03-15.
+//
+// Certificate validity before 2026 follows the BR section 6.3.2 history of
+// the earlier versions: 39 months (modeled as 1186 days) through 2018-02-28,
+// 825 days through 2020-08-31, then 398 days through 2026-03-14. The 825-day
+// step from 2018-03-01 is confirmed by the BR change history in section
+// 1.2.1.
+//
+// VERIFY: the 1186-day figure and the 2020-09-01 start of the 398-day
+// validity limit come from historical BR versions that 2.3.1 no longer
+// contains; confirm both against those versions.
 var (
 	// Effective200Days is when the 200/200-day limits take effect.
 	Effective200Days = time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)

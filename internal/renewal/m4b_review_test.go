@@ -177,8 +177,7 @@ func TestCadenceDeduplicatesIssuanceIdentity(t *testing.T) {
 }
 
 // TestLetsEncryptStepLabeledAnnounced pins M4b review finding 8: the announced
-// Let's Encrypt lifetimes are not presented as confirmed while the VERIFY
-// marker on their dates stands.
+// Let's Encrypt lifetimes are labeled with the announcement that set them.
 func TestLetsEncryptStepLabeledAnnounced(t *testing.T) {
 	in := inputAt("2026-06-01T00:00:00Z", "2026-08-30T00:00:00Z", "2026-06-02T00:00:00Z")
 	in.Manager = &Manager{IssuerType: "acme", ACMEServer: "https://acme-v02.api.letsencrypt.org/directory", RenewBefore: "1680h0m0s"}
@@ -187,7 +186,7 @@ func TestLetsEncryptStepLabeledAnnounced(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing the Let's Encrypt risk: %v", got.Risks)
 	}
-	if !strings.Contains(risk.Detail, "announced, not confirmed") {
-		t.Fatalf("detail = %q, want an announced-not-confirmed label", risk.Detail)
+	if !strings.Contains(risk.Detail, "announced by Let's Encrypt on 2025-12-02") {
+		t.Fatalf("detail = %q, want the announcement label", risk.Detail)
 	}
 }

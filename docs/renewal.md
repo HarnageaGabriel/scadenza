@@ -164,7 +164,7 @@ is unchanged.
 ## Time rules and sources
 
 The dated validity limits come from `internal/policy` (CA/Browser Forum
-SC-081v3). Renewal-specific facts come from:
+Baseline Requirements). Renewal-specific facts come from:
 
 - cert-manager, `spec.duration`, `spec.renewBefore`, `spec.renewBeforePercentage`,
   `status.renewalTime`, and the `Ready` condition:
@@ -173,17 +173,28 @@ SC-081v3). Renewal-specific facts come from:
   actual issued duration, `spec.duration` must be greater than
   `spec.renewBefore`, and `spec.renewBeforePercentage` is a percentage of the
   actual issued lifetime.
+- CA/Browser Forum Baseline Requirements, version 2.3.1 (4 October 2026),
+  sections 6.3.2, 4.2.1 and 1.2.2, confirmed on 2026-10-20. Section 6.3.2
+  caps the validity of a Subscriber Certificate at 398 days before
+  2026-03-15, 200 days from 2026-03-15, 100 days from 2027-03-15 and 47
+  days from 2029-03-15, and that cap applies by issuance date. Section 4.2.1
+  allows domain name and IP address validation to be reused for 398 days
+  before 2026-03-15, 200 days from 2026-03-15, 100 days from 2027-03-15 and
+  10 days from 2029-03-15, and allows subject identity information to be
+  reused for 398 days from 2026-03-15. The 825-day validity step from
+  2018-03-01 is confirmed by the BR change history in section 1.2.1.
 - Let's Encrypt, `https://letsencrypt.org/2025/12/02/from-90-to-45`: the default
-  profile is 90 days, 64 days from 2027-02-10, and 45 days from 2028-02-16.
-  Let's Encrypt recommends renewing at about two-thirds of the lifetime or with
-  ARI, not at a fixed interval.
+  profile is 90 days, 64 days from 2027-02-10, and 45 days from 2028-02-16,
+  and the `tlsserver` profile issues 45-day certificates from 2026-05-13. Let's
+  Encrypt recommends renewing at about two-thirds of the lifetime or with ARI,
+  not at a fixed interval. The step dates were confirmed against that post on
+  2026-10-20; they are announced dates and Let's Encrypt may still change
+  them, so a risk detail names the announcement they come from.
 
-**VERIFY:** the 64-day (2027-02-10) and 45-day (2028-02-16) Let's Encrypt step
-dates are encoded from the announcement and must be confirmed against the
-official post before they are relied on. Because they are announced rather than
-confirmed, a risk detail names them as announced, not confirmed. The public ACME
-directory hosts and the CA/B backdating allowance carry the same `VERIFY`
-markers in the code.
+**VERIFY:** the 1186-day (39 months) validity figure and the 2020-09-01 start
+of the 398-day limit come from historical BR versions that 2.3.1 no longer
+contains and must be confirmed against those versions. The public ACME
+directory hosts of the other CAs carry the same `VERIFY` marker in the code.
 
 scadenza reads only fields it already reads from the cluster: `spec.duration`,
 `spec.renewBefore`, `spec.renewBeforePercentage`, `spec.dnsNames`,
