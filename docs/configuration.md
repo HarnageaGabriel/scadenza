@@ -109,4 +109,7 @@ same as the matching flags without `--kube`.
 The file must be a regular file and is read under a 1 MiB cap, so a directory,
 a named pipe, a device, or an oversized file is a usage error (exit 2) instead
 of a hang. The file must hold exactly one YAML document, and the document may
-not nest deeper than 64 levels.
+not nest deeper than 64 levels. Anchors, aliases and merge keys are not
+supported: a file of this kind never needs them, an alias can expand a
+document exponentially inside the size cap, and a merge key can bring in keys
+the unknown-key check never sees.

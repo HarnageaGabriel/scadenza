@@ -574,41 +574,80 @@ func (d *recordingDialer) dialedAddresses() []string {
 
 // TestSpecialAddressReasonBlocksSpecialAddresses proves the guard rejects
 // every special address, including the IPv4-mapped and IPv4-compatible IPv6
-// forms, and keeps the private ranges an internal estate needs.
+// forms, the IPv6 forms that carry an IPv4 address inside them, and the
+// cloud metadata endpoints, and keeps the private ranges an internal estate
+// needs.
 func TestSpecialAddressReasonBlocksSpecialAddresses(t *testing.T) {
-	blocked := []string{
-		"127.0.0.1",
-		"127.1.2.3",
-		"::1",
-		"169.254.169.254",
-		"::ffff:169.254.169.254",
-		"::ffff:127.0.0.1",
-		"fe80::1",
-		"0.0.0.0",
-		"::",
-		"224.0.0.1",
-		"ff02::1",
-		"0.1.2.3",
-	}
-	for _, address := range blocked {
-		ip := net.ParseIP(address)
-		if ip == nil {
-			t.Fatalf("test address %q does not parse", address)
-		}
-		if specialAddressReason(ip) == "" {
-			t.Fatalf("address %q was not blocked", address)
-		}
-	}
+	tests := []struct {
+		name    string
+		address string
+		reason  string
+	}{
+		// The addresses the guard refused before.
+		{name: "loopback", address: "127.0.0.1", reason: "a loopback address"},
+		{name: "loopback short", address: "127.1.2.3", reason: "a loopback address"},
+		{name: "loopback ipv6", address: "::1", reason: "a loopback address"},
+		{name: "link local", address: "169.254.169.254", reason: "a link-local unicast address"},
+		{name: "link local mapped", address: "::ffff:169.254.169.254", reason: "a link-local unicast address"},
+		{name: "loopback mapped", address: "::ffff:127.0.0.1", reason: "a loopback address"},
+		{name: "link local ipv6", address: "fe80::1", reason: "a link-local unicast address"},
+		{name: "unspecified ipv4", address: "0.0.0.0", reason: "an unspecified address"},
+		{name: "unspecified ipv6", address: "::", reason: "an unspecified address"},
+		{name: "link local multicast ipv4", address: "224.0.0.1", reason: "a link-local multicast address"},
+		{name: "link local multicast ipv6", address: "ff02::1", reason: "a link-local multicast address"},
+		{name: "this network", address: "0.1.2.3", reason: "in the 0.0.0.0/8 range"},
 
-	allowed := []string{"10.0.0.1", "172.16.0.1", "192.168.1.1", "fd00::1", "8.8.8.8"}
-	for _, address := range allowed {
-		ip := net.ParseIP(address)
-		if ip == nil {
-			t.Fatalf("test address %q does not parse", address)
-		}
-		if reason := specialAddressReason(ip); reason != "" {
-			t.Fatalf("address %q was blocked as %q", address, reason)
-		}
+		// The IPv6 forms that carry an IPv4 address inside them.
+		{name: "nat64 loopback", address: "64:ff9b::7f00:1", reason: "a loopback address"},
+		{name: "nat64 link local", address: "64:ff9b::a9fe:a9fe", reason: "a link-local unicast address"},
+		{name: "nat64 unspecified", address: "64:ff9b::", reason: "an unspecified address"},
+		{name: "local use nat64", address: "64:ff9b:1::1", reason: "a local use NAT64 prefix"},
+		{name: "local use nat64 wide", address: "64:ff9b:1:1234::1", reason: "a local use NAT64 prefix"},
+		{name: "six to four loopback", address: "2002:7f00:1::", reason: "a loopback address"},
+		{name: "six to four link local", address: "2002:a9fe:a9fe::", reason: "a link-local unicast address"},
+		{name: "ipv4 translated loopback", address: "::ffff:0:7f00:1", reason: "a loopback address"},
+		{name: "ipv4 translated link local", address: "::ffff:0:a9fe:a9fe", reason: "a link-local unicast address"},
+		{name: "teredo", address: "2001::1", reason: "a Teredo tunnel address"},
+		{name: "teredo payload", address: "2001:0:4136:e468:8000:63bf:3fff:fdd2", reason: "a Teredo tunnel address"},
+
+		// The cloud metadata endpoints.
+		{name: "alibaba metadata", address: "100.100.100.200", reason: "a cloud metadata address"},
+		{name: "azure metadata", address: "168.63.129.16", reason: "a cloud metadata address"},
+		{name: "oracle metadata", address: "192.0.0.192", reason: "a cloud metadata address"},
+		{name: "aws metadata v4", address: "169.254.170.2", reason: "a link-local unicast address"},
+		{name: "aws metadata v6", address: "fd00:ec2::254", reason: "a cloud metadata address"},
+		{name: "alibaba metadata mapped", address: "::ffff:100.100.100.200", reason: "a cloud metadata address"},
+		{name: "alibaba metadata nat64", address: "64:ff9b::6464:64c8", reason: "a cloud metadata address"},
+
+		// The addresses the guard must keep: an internal estate, a tailnet, a
+		// public address, and the neighbours of the metadata endpoints.
+		{name: "private", address: "10.0.0.1"},
+		{name: "private", address: "172.16.0.1"},
+		{name: "private", address: "192.168.1.1"},
+		{name: "unique local", address: "fd00::1"},
+		{name: "public", address: "8.8.8.8"},
+		{name: "shared address space", address: "100.64.0.1"},
+		{name: "unique local", address: "fc00::1"},
+		{name: "documentation", address: "2001:db8::1"},
+		{name: "nat64 to a public address", address: "64:ff9b::808:808"},
+		{name: "six to four to a public address", address: "2002:808:808::"},
+		{name: "ipv4 translated to a public address", address: "::ffff:0:808:808"},
+		{name: "next to the alibaba metadata", address: "100.100.100.201"},
+		{name: "next to the azure metadata", address: "168.63.129.17"},
+		{name: "next to the oracle metadata", address: "192.0.0.193"},
+		{name: "next to the aws metadata", address: "fd00:ec2::255"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ip := net.ParseIP(test.address)
+			if ip == nil {
+				t.Fatalf("test address %q does not parse", test.address)
+			}
+			reason := specialAddressReason(ip)
+			if reason != test.reason {
+				t.Fatalf("specialAddressReason(%q) = %q, want %q", test.address, reason, test.reason)
+			}
+		})
 	}
 }
 
@@ -625,6 +664,27 @@ func TestFilterSpecialAddressesKeepsAllowedAddresses(t *testing.T) {
 	}
 	if blocked.Reason != "a loopback address" {
 		t.Fatalf("blocked reason = %q", blocked.Reason)
+	}
+}
+
+// TestFilterSpecialAddressesRefusesEmbeddedAndMetadataAddresses proves the
+// filter refuses an address that carries an IPv4 address inside it and a
+// cloud metadata endpoint, and keeps the address next to the endpoint.
+func TestFilterSpecialAddressesRefusesEmbeddedAndMetadataAddresses(t *testing.T) {
+	allowed, blocked := filterSpecialAddresses([]string{"100.100.100.201", "100.100.100.200"})
+	if len(allowed) != 1 || allowed[0] != "100.100.100.201" {
+		t.Fatalf("allowed = %v, want only the address next to the metadata endpoint", allowed)
+	}
+	if blocked.Address != "100.100.100.200" || blocked.Reason != "a cloud metadata address" {
+		t.Fatalf("blocked = %+v, want the metadata endpoint and its reason", blocked)
+	}
+
+	allowed, blocked = filterSpecialAddresses([]string{"64:ff9b::7f00:1"})
+	if len(allowed) != 0 {
+		t.Fatalf("allowed = %v, want no dialable address", allowed)
+	}
+	if blocked.Address != "64:ff9b::7f00:1" || blocked.Reason != "a loopback address" {
+		t.Fatalf("blocked = %+v, want the embedded loopback address and its reason", blocked)
 	}
 }
 
