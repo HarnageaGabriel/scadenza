@@ -5,17 +5,14 @@
 package config
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
 	"github.com/HarnageaGabriel/scadenza/internal/owner"
-	"gopkg.in/yaml.v3"
+	"github.com/HarnageaGabriel/scadenza/internal/safefile"
 )
 
 // FailOnNone disables exit 3 when it is the only fail-on kind.
@@ -51,6 +48,11 @@ var ErrEmptyFailOnList = errors.New("fail-on list must not be empty")
 
 // ErrInvalid marks a configuration file that does not match the schema.
 var ErrInvalid = errors.New("invalid configuration")
+
+// MaxFileBytes caps the configuration file. The file is read into memory, so
+// the cap keeps one hostile path from exhausting the process. It is well
+// above the size of a configuration file that documents every key.
+const MaxFileBytes = 1 << 20
 
 // DefaultFailOn is the documented default failure policy. ct_only is reported
 // but excluded (CDNs issue several certificates in parallel, so it is noisy),
@@ -140,9 +142,12 @@ type policyDoc struct {
 }
 
 // Load reads and parses an explicit configuration file.
+//
+// The file must be a regular file and is read under the MaxFileBytes cap, so
+// a device, a named pipe, or an oversized file is an error instead of a hang
+// or an allocation.
 func Load(path string) (Config, error) {
-	//nolint:gosec // G304: the path comes from --config, supplied by the user.
-	data, err := os.ReadFile(path)
+	data, err := safefile.Read(path, MaxFileBytes)
 	if err != nil {
 		return Config{}, fmt.Errorf("read config file: %w", err)
 	}
@@ -161,11 +166,13 @@ func Load(path string) (Config, error) {
 }
 
 // Parse decodes a configuration document with strict key checking.
+//
+// The input must hold exactly one YAML document, and the document may not
+// nest deeper than safefile.MaxYAMLDepth: a second document and a deeply
+// nested document are errors instead of being ignored.
 func Parse(data []byte) (Config, error) {
 	var decoded document
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&decoded); err != nil && !errors.Is(err, io.EOF) {
+	if err := safefile.DecodeYAML(data, &decoded); err != nil {
 		return Config{}, fmt.Errorf("decode config file: %w", err)
 	}
 	if decoded.Version != 1 {
