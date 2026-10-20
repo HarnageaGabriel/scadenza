@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"syscall"
 	"testing"
@@ -30,7 +31,7 @@ func TestSignalContextCancelsOnInterrupt(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the interrupt did not cancel the context")
 	}
-	if cause := context.Cause(ctx); cause != cli.ErrInterrupted {
+	if cause := context.Cause(ctx); !errors.Is(cause, cli.ErrInterrupted) {
 		t.Fatalf("cause = %v, want %v", cause, cli.ErrInterrupted)
 	}
 }
