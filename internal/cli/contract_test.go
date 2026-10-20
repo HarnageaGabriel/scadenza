@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,7 +32,7 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 		{"ct success", "ct-v1.schema.json", func(t *testing.T) []byte {
 			server := certSpotterServer(t, certSpotterOne)
 			var stdout, stderr bytes.Buffer
-			if code := execute([]string{"ct", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, testCTDependencies(server.URL, server.URL)); code != ExitOK {
+			if code := execute(context.Background(), []string{"ct", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, testCTDependencies(server.URL, server.URL)); code != ExitOK {
 				t.Fatalf("ct exit = %d; stderr=%s", code, stderr.String())
 			}
 			return stdout.Bytes()
@@ -39,7 +40,7 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 		{"scan success", "scan-v1.schema.json", func(t *testing.T) []byte {
 			server := certSpotterServer(t, ctOnlyFixture())
 			var stdout, stderr bytes.Buffer
-			if code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code != ExitOK {
+			if code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code != ExitOK {
 				t.Fatalf("scan exit = %d; stderr=%s", code, stderr.String())
 			}
 			return stdout.Bytes()
@@ -47,12 +48,12 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 		{"scan partial failure", "scan-v1.schema.json", func(t *testing.T) []byte {
 			server := certSpotterServer(t, scanCTFixture())
 			var stdout, stderr bytes.Buffer
-			execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, goldenProber()))
+			execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, goldenProber()))
 			return stdout.Bytes()
 		}},
 		{"scan all sources failed", "scan-v1.schema.json", func(_ *testing.T) []byte {
 			var stdout bytes.Buffer
-			execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &bytes.Buffer{}, scanDependencies("http://127.0.0.1:1", goldenProber()))
+			execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &bytes.Buffer{}, scanDependencies("http://127.0.0.1:1", goldenProber()))
 			return stdout.Bytes()
 		}},
 		{"scan strict with default sources", "scan-v1.schema.json", func(t *testing.T) []byte {
@@ -62,7 +63,7 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 				"example.com:443": {Fingerprint: strings.Repeat("a", 64), Names: []string{"example.com"}, Issuer: "CN=Example Root", NotBefore: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), Trusted: true},
 			}}
 			var stdout, stderr bytes.Buffer
-			if code := execute([]string{"scan", "--domain", "example.com", "--fail-on", "none", "--strict", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober)); code != ExitOK {
+			if code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--fail-on", "none", "--strict", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober)); code != ExitOK {
 				t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 			}
 			return stdout.Bytes()
@@ -70,19 +71,19 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 		{"scan strict", "scan-v1.schema.json", func(t *testing.T) []byte {
 			server := certSpotterServer(t, scanCTFixture())
 			var stdout bytes.Buffer
-			execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--fail-on", "none", "--strict", "--format", "json"}, &stdout, &bytes.Buffer{}, scanDependencies(server.URL, goldenProber()))
+			execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--fail-on", "none", "--strict", "--format", "json"}, &stdout, &bytes.Buffer{}, scanDependencies(server.URL, goldenProber()))
 			return stdout.Bytes()
 		}},
 		{"scan kube", "scan-v1.schema.json", func(t *testing.T) []byte {
 			var stdout bytes.Buffer
-			if code := execute([]string{"scan", "--kube", "--format", "json"}, &stdout, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
+			if code := execute(context.Background(), []string{"scan", "--kube", "--format", "json"}, &stdout, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
 				t.Fatalf("kube scan exit = %d", code)
 			}
 			return stdout.Bytes()
 		}},
 		{"scan kube secrets", "scan-v1.schema.json", func(t *testing.T) []byte {
 			var stdout bytes.Buffer
-			if code := execute([]string{"scan", "--kube", "--kube-secrets", "--format", "json"}, &stdout, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
+			if code := execute(context.Background(), []string{"scan", "--kube", "--kube-secrets", "--format", "json"}, &stdout, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
 				t.Fatalf("kube scan exit = %d", code)
 			}
 			return stdout.Bytes()
@@ -100,7 +101,7 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 			dependencies := scanDependencies("http://127.0.0.1:1", fakeProber{})
 			dependencies.loadAzure = func(azurekv.LoadOptions) (azurekv.Source, error) { return stub, nil }
 			var stdout, stderr bytes.Buffer
-			if code := execute([]string{"scan", "--azure-keyvault", "https://demo.vault.azure.net", "--format", "json"}, &stdout, &stderr, dependencies); code != ExitOK {
+			if code := execute(context.Background(), []string{"scan", "--azure-keyvault", "https://demo.vault.azure.net", "--format", "json"}, &stdout, &stderr, dependencies); code != ExitOK {
 				t.Fatalf("azure scan exit = %d; stderr=%s", code, stderr.String())
 			}
 			return stdout.Bytes()
@@ -115,7 +116,7 @@ func TestContractSchemasValidateScenarios(t *testing.T) {
 				"loopback.example.com": "127.0.0.1",
 			}}}
 			var stdout, stderr bytes.Buffer
-			execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
+			execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, prober))
 			if !strings.Contains(stdout.String(), `"class":"blocked-address"`) {
 				t.Fatalf("no blocked-address probe error: %s", stdout.String())
 			}

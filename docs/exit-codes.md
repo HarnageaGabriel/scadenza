@@ -3,7 +3,7 @@
 `scadenza` uses stable process exit codes so scripts can distinguish findings from operational failures.
 
 When more than one condition holds, the highest-priority code wins. The order is
-**2 (usage) > 4 (all sources unavailable) > 3 (blocking finding) > 5 (incomplete scan) > 0**.
+**130 (interrupted) > 2 (usage) > 4 (all sources unavailable) > 3 (blocking finding) > 5 (incomplete scan) > 0**.
 
 | Code | Meaning |
 | ---: | --- |
@@ -13,9 +13,13 @@ When more than one condition holds, the highest-priority code wins. The order is
 | 3 | A blocking finding is present: at least one reported finding has a kind selected by `--fail-on`. `scadenza ct` never exits 3. |
 | 4 | Every requested external source was unavailable (`scadenza ct`, `scadenza scan`). `scadenza scan` exits 4 only when at least one external source (Certificate Transparency, Kubernetes, or Azure Key Vault) was requested and every requested one failed (a failed TLS probe is a `probe_errors` entry, not exit 4). Kubernetes is unavailable after a 401 or when no requested Secret or Certificate list succeeds; a 403 is partial when another requested list succeeds. Azure Key Vault is unavailable when the credential chain fails or when no vault could be read at all; a vault that answered while another one failed is a partial source. A partial source failure, or an unavailable source while another requested source answered, is a warning rather than exit 4. |
 | 5 | The scan was incomplete: `--strict` found a partial or failed source, a failed probe, or an unchecked name, or `--min-coverage` was not met (`SCD-0020`). |
+| 130 | The run was stopped by an interrupt signal (Ctrl-C, or `SIGTERM`). No report is written, one line (`interrupted`) is written to stderr, and nothing else is reported. |
 
 ## Precedence
 
+- **130 first.** An interrupted run is stopped before it can report a result, so
+  it exits 130 and writes no document: a partial document would look like a
+  result. The interrupt itself writes one line, `interrupted`, to stderr.
 - **2 first.** Usage and input errors are detected before any scan work, so a bad
   invocation never reports a scan result.
 - **4 before 3.** When every requested external source is unavailable, any
@@ -42,5 +46,5 @@ code changes.
 
 ## `scadenza ct`
 
-`scadenza ct` exits `0` on success, `2` on a usage or input error, and `4` when
-every selected source failed.
+`scadenza ct` exits `0` on success, `2` on a usage or input error, `4` when
+every selected source failed, and `130` when the run was interrupted.

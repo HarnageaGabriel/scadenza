@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -232,7 +233,7 @@ func TestScanConfigErrorCarriesNoEscapeOrLineBreak(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--config", path}, &stdout, &stderr, scanDependencies("x", fakeProber{}))
+	code := execute(context.Background(), []string{"scan", "--config", path}, &stdout, &stderr, scanDependencies("x", fakeProber{}))
 	if code != ExitUsageError {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -76,7 +77,7 @@ func TestScanSourceUnavailableBeatsBlockingFinding(t *testing.T) {
 	t.Run("an unavailable source beats a blocking finding", func(t *testing.T) {
 		dependencies := wiringDependencies(scanSource(false), liveOnlyProber())
 		var stdout, stderr bytes.Buffer
-		code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"},
+		code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"},
 			&stdout, &stderr, dependencies)
 		if code != ExitSourceUnavailable {
 			t.Fatalf("exit = %d, want %d; stdout=%s stderr=%s", code, ExitSourceUnavailable, stdout.String(), stderr.String())
@@ -91,7 +92,7 @@ func TestScanSourceUnavailableBeatsBlockingFinding(t *testing.T) {
 	t.Run("the same finding alone exits 3", func(t *testing.T) {
 		dependencies := wiringDependencies(scanSource(true), liveOnlyProber())
 		var stdout, stderr bytes.Buffer
-		code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"},
+		code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"},
 			&stdout, &stderr, dependencies)
 		if code != ExitFindingsPresent {
 			t.Fatalf("exit = %d, want %d; stdout=%s stderr=%s", code, ExitFindingsPresent, stdout.String(), stderr.String())
@@ -108,7 +109,7 @@ func TestScanSourceUnavailableBeatsBlockingFinding(t *testing.T) {
 func TestScanStrictTreatsFailedSourceAsIncomplete(t *testing.T) {
 	dependencies := scanDependenciesWithFailedKube(scanSource(true), matchedProber())
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--kube", "--strict", "--format", "json"},
+	code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--kube", "--strict", "--format", "json"},
 		&stdout, &stderr, dependencies)
 	if code != ExitIncompleteScan {
 		t.Fatalf("exit = %d, want %d; stdout=%s stderr=%s", code, ExitIncompleteScan, stdout.String(), stderr.String())
@@ -133,7 +134,7 @@ func TestScanStrictTreatsFailedSourceAsIncomplete(t *testing.T) {
 	// incomplete scan and the exit code is not 5.
 	stdout.Reset()
 	stderr.Reset()
-	code = execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--kube", "--format", "json"},
+	code = execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--kube", "--format", "json"},
 		&stdout, &stderr, dependencies)
 	if code != ExitOK {
 		t.Fatalf("exit without --strict = %d, want %d; stdout=%s stderr=%s", code, ExitOK, stdout.String(), stderr.String())
@@ -179,7 +180,7 @@ func TestScanExitPrecedenceCombinations(t *testing.T) {
 			}
 			dependencies := scanDependenciesWithFailedKube(scanSource(!test.unavailable), liveOnlyProber())
 			var stdout, stderr bytes.Buffer
-			code := execute(args, &stdout, &stderr, dependencies)
+			code := execute(context.Background(), args, &stdout, &stderr, dependencies)
 			if code != test.want {
 				t.Fatalf("exit = %d, want %d; stdout=%s stderr=%s", code, test.want, stdout.String(), stderr.String())
 			}

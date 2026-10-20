@@ -176,7 +176,7 @@ func TestScanGuardsOnlyCertificateTransparencyHosts(t *testing.T) {
 				args = append(args, "--host", test.ctName)
 			}
 			var stdout, stderr bytes.Buffer
-			if code := execute(args, &stdout, &stderr, wiringDependencies(source, prober)); code != ExitOK {
+			if code := execute(context.Background(), args, &stdout, &stderr, wiringDependencies(source, prober)); code != ExitOK {
 				t.Fatalf("exit = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 			}
 			document := decodeScanDocument(t, stdout.Bytes())
@@ -238,7 +238,7 @@ func TestScanDoesNotProbeInvalidCertificateTransparencyNames(t *testing.T) {
 			prober := &tlsprobe.Prober{Timeout: 3 * time.Second, Clock: clock.Fixed{Time: testNowScan}, Resolver: resolver, Dialer: dialer}
 			source := &fakeCTSource{name: "certspotter", certificates: []ct.Certificate{ctRecord(test.ctName)}}
 			var stdout, stderr bytes.Buffer
-			if code := execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"},
+			if code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"},
 				&stdout, &stderr, wiringDependencies(source, prober)); code != ExitOK {
 				t.Fatalf("exit = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 			}
@@ -308,7 +308,7 @@ func TestScanReportsTruncatedCertificateTransparencyResult(t *testing.T) {
 			prober := &tlsprobe.Prober{Timeout: 3 * time.Second, Clock: clock.Fixed{Time: testNowScan}, Resolver: resolver}
 			source := &fakeCTSource{name: "certspotter", certificates: []ct.Certificate{ctRecord("example.com")}, truncated: test.truncated}
 			var stdout, stderr bytes.Buffer
-			code := execute([]string{
+			code := execute(context.Background(), []string{
 				"scan", "--domain", "example.com", "--source", "certspotter",
 				"--port", strconv.Itoa(port), "--fail-on", "none", "--strict", "--format", "json",
 			}, &stdout, &stderr, wiringDependencies(source, prober))

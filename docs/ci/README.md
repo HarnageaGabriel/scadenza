@@ -22,14 +22,18 @@ above.
 | 3 | A finding selected by `--fail-on` is present. | Fail the job: the policy was broken. |
 | 4 | Every requested source was unavailable. | Fail the job: nothing was checked. |
 | 5 | The scan was incomplete (`--strict` or `--min-coverage` not met). | Fail the job. |
+| 130 | The run was stopped by a signal. | Fail the job: the scan was cancelled, not clean. |
 
-The precedence is 2 > 4 > 3 > 5 > 0. The full rules are in
+The precedence is 130 > 2 > 4 > 3 > 5 > 0. The full rules are in
 [exit codes](../exit-codes.md).
 
-Only 0 is a pass. 3 and 5 are policy results; 1, 2 and 4 are operational
+Only 0 is a pass. 3 and 5 are policy results; 1, 2, 4 and 130 are operational
 failures, and a pipeline that collected no data must not be green. If a
 Certificate Transparency outage must not block a merge, allow 4 explicitly and
 keep 3 and 5 blocking.
+
+A CI system that cancels a job sends `SIGTERM`: scadenza stops the scan, writes
+no report, and exits 130.
 
 ## Recommended strictness
 

@@ -112,6 +112,9 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 			diagnostics := []diag.Diagnostic{}
 			for index, source := range chosen {
 				certificates, err = source.Search(command.Context(), ct.Query{Domain: domain, IncludeSubdomains: includeSubdomains, Limit: maximum + 1, Now: dependencies.clock.Now(), IncludeExpired: expired})
+				if interrupted(command.Context()) {
+					return &commandError{code: ExitInterrupted}
+				}
 				if err == nil {
 					used = []string{source.Name()}
 					break
@@ -142,8 +145,10 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 				emitDiagnostic(stderr, "SCD-0005", domain)
 			}
 			document := render.CTDocument{SchemaVersion: "scadenza.ct/v1", Domain: domain, GeneratedAt: now.UTC(), SourcesUsed: used, Certificates: certificates, Diagnostics: diagnostics}
-			if err := render.CT(stdout, format, document); err != nil {
-				return fmt.Errorf("render output: %w", err)
+			if err := writeDocument(command.Context(), stdout, func(writer io.Writer) error {
+				return render.CT(writer, format, document)
+			}); err != nil {
+				return err
 			}
 			return nil
 		},

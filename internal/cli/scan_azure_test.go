@@ -139,7 +139,7 @@ func TestScanRejectsVaultURIWithSurroundingWhitespace(t *testing.T) {
 	for _, test := range paddedVaultURIs {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := execute([]string{"scan", "--azure-keyvault", test.value}, &stdout, &stderr, scanDependencies("x", fakeProber{}))
+			code := execute(context.Background(), []string{"scan", "--azure-keyvault", test.value}, &stdout, &stderr, scanDependencies("x", fakeProber{}))
 			if code != ExitUsageError {
 				t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 			}
@@ -161,7 +161,7 @@ func TestScanRejectsConfigVaultURIWithSurroundingWhitespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--config", path}, &stdout, &stderr, scanDependencies("x", fakeProber{}))
+	code := execute(context.Background(), []string{"scan", "--config", path}, &stdout, &stderr, scanDependencies("x", fakeProber{}))
 	if code != ExitUsageError {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}

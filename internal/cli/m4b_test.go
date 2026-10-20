@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -38,7 +39,7 @@ func decodeM4b(t *testing.T, output []byte) m4bScanDocument {
 // appears in the owners summary. ADR 0006 decisions 5 and 6.
 func TestScanKubeRenewalClassification(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := execute([]string{"scan", "--kube", "--format", "json"}, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
+	if code := execute(context.Background(), []string{"scan", "--kube", "--format", "json"}, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
 	document := decodeM4b(t, stdout.Bytes())
@@ -98,7 +99,7 @@ func TestScanManualRenewalFromConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := execute([]string{"scan", "--config", path, "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code != ExitOK {
+	if code := execute(context.Background(), []string{"scan", "--config", path, "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, ctOnlyProber())); code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
 	document := decodeM4b(t, stdout.Bytes())
@@ -120,7 +121,7 @@ func TestScanManualRenewalFromConfig(t *testing.T) {
 // leaves JSON untouched.
 func TestScanGroupByOnlyChangesTable(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := execute([]string{"scan", "--kube", "--format", "table", "--group-by", "owner"}, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
+	if code := execute(context.Background(), []string{"scan", "--kube", "--format", "table", "--group-by", "owner"}, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil)); code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
 	}
 	table := stdout.String()
@@ -131,8 +132,8 @@ func TestScanGroupByOnlyChangesTable(t *testing.T) {
 	}
 
 	var grouped, plain bytes.Buffer
-	execute([]string{"scan", "--kube", "--format", "json", "--group-by", "names"}, &grouped, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil))
-	execute([]string{"scan", "--kube", "--format", "json"}, &plain, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil))
+	execute(context.Background(), []string{"scan", "--kube", "--format", "json", "--group-by", "names"}, &grouped, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil))
+	execute(context.Background(), []string{"scan", "--kube", "--format", "json"}, &plain, &bytes.Buffer{}, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: kubeFixture()}, nil))
 	if grouped.String() != plain.String() {
 		t.Errorf("--group-by changed JSON output")
 	}
@@ -157,7 +158,7 @@ func TestScanRenewalRiskFindingFails(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := execute(test.args, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: fixture}, nil)); code != test.want {
+			if code := execute(context.Background(), test.args, &stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: fixture}, nil)); code != test.want {
 				t.Fatalf("exit = %d, want %d; stderr=%s", code, test.want, stderr.String())
 			}
 			if test.want == ExitFindingsPresent && !strings.Contains(stdout.String(), renewal.KindRenewalDegraded) {
@@ -174,8 +175,8 @@ func TestScanRecoveredRenewalInputs(t *testing.T) {
 	base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
 	dependencies.clock = fixedClock{Time: base}
 	var first, second bytes.Buffer
-	execute([]string{"scan", "--kube", "--format", "json"}, &first, &bytes.Buffer{}, dependencies)
-	execute([]string{"scan", "--kube", "--format", "json"}, &second, &bytes.Buffer{}, dependencies)
+	execute(context.Background(), []string{"scan", "--kube", "--format", "json"}, &first, &bytes.Buffer{}, dependencies)
+	execute(context.Background(), []string{"scan", "--kube", "--format", "json"}, &second, &bytes.Buffer{}, dependencies)
 	if first.String() != second.String() {
 		t.Fatal("renewal classification is not deterministic")
 	}

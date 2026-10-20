@@ -222,6 +222,9 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			}
 			azureState := readAzureKeyVault(command.Context(), dependencies.loadAzure, azureVaults, azureQPS,
 				"scadenza/"+version.Current().Version, owners, diagnostics, stderr)
+			if interrupted(command.Context()) {
+				return &commandError{code: ExitInterrupted}
+			}
 			ctRequested := ctRequestedFor(fromCT, normalizedDomains)
 			kubeRequested := kubeEnabled
 			kubeAvailable := false
@@ -244,6 +247,9 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 					emitDiagnostic(stderr, kube.CodeUnreachable, "")
 				} else {
 					scanResult, scanErr := source.Scan(command.Context())
+					if interrupted(command.Context()) {
+						return &commandError{code: ExitInterrupted}
+					}
 					kubeProblems = len(scanResult.Problems)
 					for _, problem := range scanResult.Problems {
 						diagnostics.add(problem.Code, problem.Resource)
@@ -270,6 +276,9 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 						stats := ctStats[name]
 						stats.attempted++
 						found, truncated, searchErr := searchCT(command.Context(), source, ct.Query{Domain: domain, IncludeSubdomains: true, Now: now})
+						if interrupted(command.Context()) {
+							return &commandError{code: ExitInterrupted}
+						}
 						if searchErr == nil {
 							stats.succeeded++
 							firstTruncation := truncated && !stats.truncated
@@ -360,6 +369,9 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				jobs = append(jobs, probeJob{target: target, prober: guardedProber})
 			}
 			live, probeErrors, probed := runProbeJobs(command.Context(), jobs, concurrency)
+			if interrupted(command.Context()) {
+				return &commandError{code: ExitInterrupted}
+			}
 			for _, probeError := range probeErrors {
 				diagnostics.add("SCD-0010", probeError.Host)
 				emitDiagnostic(stderr, "SCD-0010", probeError.Host+":"+strconv.Itoa(probeError.Port)+" "+probeError.Class)
@@ -473,8 +485,10 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				document.Diagnostics = diagnostics.items
 			}
 
-			if err := render.ScanGrouped(stdout, format, document, groupBy); err != nil {
-				return fmt.Errorf("render output: %w", err)
+			if err := writeDocument(command.Context(), stdout, func(writer io.Writer) error {
+				return render.ScanGrouped(writer, format, document, groupBy)
+			}); err != nil {
+				return err
 			}
 			if incomplete {
 				severity := diag.SeverityError

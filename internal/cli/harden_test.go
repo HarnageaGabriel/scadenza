@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -106,7 +107,7 @@ func TestScanDiagnosticsNeutralizeHostileNames(t *testing.T) {
 			name := "*.\u202EPASS." + hostile.detail + ".example.com"
 			server := hostileCTServer(t, name)
 			var stdout, stderr bytes.Buffer
-			execute([]string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, fakeProber{}))
+			execute(context.Background(), []string{"scan", "--domain", "example.com", "--source", "certspotter", "--format", "json"}, &stdout, &stderr, scanDependencies(server.URL, fakeProber{}))
 			lines := strings.Split(strings.TrimSuffix(stderr.String(), "\n"), "\n")
 			if len(lines) == 0 || lines[0] == "" {
 				t.Fatalf("no diagnostic on stderr: %q", stderr.String())

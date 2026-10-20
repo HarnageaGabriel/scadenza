@@ -2,7 +2,10 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -24,21 +27,49 @@ const (
 	// ExitIncompleteScan indicates the scan did not check everything it was
 	// asked to check (--strict or --min-coverage).
 	ExitIncompleteScan = 5
+	// ExitInterrupted indicates the run was stopped by an interrupt signal.
+	// It is the code a shell expects from a process that was interrupted.
+	ExitInterrupted = 130
 )
+
+// interruptedMessage is the one line a stopped run writes to stderr. It is
+// static text, so it never carries a value from the interrupted run.
+const interruptedMessage = "interrupted"
+
+// ErrInterrupted is the cancellation cause of a run that was stopped by an
+// interrupt signal. A context cancelled with this cause ends the run with
+// ExitInterrupted and without a report; a context cancelled for any other
+// reason keeps the ordinary exit codes.
+var ErrInterrupted = errors.New(interruptedMessage)
 
 // Execute runs the CLI and converts command errors to documented exit codes.
 func Execute(args []string, stdout, stderr io.Writer) int {
-	return execute(args, stdout, stderr, productionCTDependencies())
+	return ExecuteContext(context.Background(), args, stdout, stderr)
 }
 
-// execute runs the command line and converts its errors to documented exit
-// codes. Cobra adds the commands it provides itself (help, completion, and the
-// hidden completion request) while it runs, so the command line is only
-// checked against the complete command tree after the run.
-func execute(args []string, stdout, stderr io.Writer, dependencies ctDependencies) int {
+// ExecuteContext runs the CLI under the given context and converts command
+// errors to documented exit codes. Cancelling the context with ErrInterrupted
+// stops the run: no report is written, one line is written to stderr, and the
+// run exits with ExitInterrupted.
+func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return execute(ctx, args, stdout, stderr, productionCTDependencies())
+}
+
+// execute runs the command line under the given context and converts its
+// errors to documented exit codes. Cobra adds the commands it provides itself
+// (help, completion, and the hidden completion request) while it runs, so the
+// command line is only checked against the complete command tree after the
+// run.
+func execute(ctx context.Context, args []string, stdout, stderr io.Writer, dependencies ctDependencies) int {
 	root := newRootCommand(stdout, stderr, dependencies)
 	root.SetArgs(args)
-	err := root.Execute()
+	err := root.ExecuteContext(ctx)
+	if interrupted(ctx) {
+		// The run was stopped by a signal. It reports nothing: a partial
+		// document would look like a result.
+		_, _ = fmt.Fprintln(stderr, interruptedMessage)
+		return ExitInterrupted
+	}
 	if err == nil {
 		return ExitOK
 	}
@@ -49,6 +80,30 @@ func execute(args []string, stdout, stderr io.Writer, dependencies ctDependencie
 		return ExitUsageError
 	}
 	return exitCode(err)
+}
+
+// interrupted reports whether the run was stopped by an interrupt signal. A
+// context cancelled for any other reason (a deadline, a cancel by the
+// caller) is not an interrupt and keeps the ordinary exit codes.
+func interrupted(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), ErrInterrupted)
+}
+
+// writeDocument renders the document into a buffer and writes it to stdout
+// only when the run was not interrupted, so an interrupted run never leaves a
+// partial document on stdout.
+func writeDocument(ctx context.Context, stdout io.Writer, render func(io.Writer) error) error {
+	var buffer bytes.Buffer
+	if err := render(&buffer); err != nil {
+		return fmt.Errorf("render output: %w", err)
+	}
+	if interrupted(ctx) {
+		return &commandError{code: ExitInterrupted}
+	}
+	if _, err := stdout.Write(buffer.Bytes()); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	return nil
 }
 
 // printUsageError writes the usage error of an unknown command the way cobra

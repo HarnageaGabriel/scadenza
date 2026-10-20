@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -42,7 +43,7 @@ func TestScanDefaultSourcesStrictTreatsFallbackAsNotRequested(t *testing.T) {
 		},
 	}}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--domain", "example.com", "--fail-on", "none", "--strict", "--format", "json"},
+	code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--fail-on", "none", "--strict", "--format", "json"},
 		&stdout, &stderr, scanDependencies(server.URL, prober))
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
@@ -98,7 +99,7 @@ func TestScanCTSourcePartialFailsStrict(t *testing.T) {
 	dependencies := testCTDependencies(server.URL+"/cert", server.URL+"/crt")
 	dependencies.prober = prober
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{
+	code := execute(context.Background(), []string{
 		"scan", "--domain", "first.example.com", "--domain", "second.example.com",
 		"--fail-on", "none", "--strict", "--format", "json",
 	}, &stdout, &stderr, dependencies)
@@ -119,7 +120,7 @@ func TestScanCTSourcePartialFailsStrict(t *testing.T) {
 func TestScanKubeProblemMarksPartial(t *testing.T) {
 	result := kube.Result{Problems: []kube.Problem{{Code: kube.CodeCRDMissing, Resource: "certificates"}}}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--kube", "--fail-on", "none", "--strict", "--format", "json"},
+	code := execute(context.Background(), []string{"scan", "--kube", "--fail-on", "none", "--strict", "--format", "json"},
 		&stdout, &stderr, scanKubeDependencies("x", fakeProber{}, fakeKubeSource{result: result}, nil))
 	if code != ExitIncompleteScan {
 		t.Fatalf("exit = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
@@ -157,7 +158,7 @@ func TestMaskedIncompleteScanEmitsWarningSCD0020(t *testing.T) {
 	t.Run("blocking finding wins", func(t *testing.T) {
 		server := certSpotterServer(t, scanCTFixture())
 		var stdout, stderr bytes.Buffer
-		code := execute([]string{
+		code := execute(context.Background(), []string{
 			"scan", "--domain", "example.com", "--source", "certspotter",
 			"--fail-on", "live_only", "--strict", "--format", "json",
 		},
@@ -180,7 +181,7 @@ func TestMaskedIncompleteScanEmitsWarningSCD0020(t *testing.T) {
 		}))
 		defer server.Close()
 		var stdout, stderr bytes.Buffer
-		code := execute([]string{
+		code := execute(context.Background(), []string{
 			"scan", "--domain", "example.com", "--source", "certspotter",
 			"--fail-on", "none", "--strict", "--format", "json",
 		},
@@ -206,7 +207,7 @@ func TestScanNowPropagatesEvaluationClock(t *testing.T) {
 	port := serveTLS(t, leaf)
 	prober := &tlsprobe.Prober{Timeout: 3 * time.Second, Resolver: loopbackResolver{}, Roots: roots}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{
+	code := execute(context.Background(), []string{
 		"scan", "--from-ct=false", "--domain", "example.com",
 		"--port", strconv.Itoa(port), "--now", testNowScan.Format(time.RFC3339),
 		"--fail-on", "none", "--format", "json",
@@ -234,7 +235,7 @@ func TestScanPassesEvaluationClockToKube(t *testing.T) {
 		return fakeKubeSource{}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	code := execute([]string{"scan", "--kube", "--now", testNowScan.Format(time.RFC3339), "--format", "json"},
+	code := execute(context.Background(), []string{"scan", "--kube", "--now", testNowScan.Format(time.RFC3339), "--format", "json"},
 		&stdout, &stderr, dependencies)
 	if code != ExitOK {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
@@ -254,7 +255,7 @@ func TestTargetKeyDistinguishesPorts(t *testing.T) {
 func TestScanRejectsEmptyFailOnList(t *testing.T) {
 	for _, value := range []string{"", "   ", ","} {
 		var stdout, stderr bytes.Buffer
-		code := execute([]string{"scan", "--domain", "example.com", "--fail-on", value, "--format", "json"},
+		code := execute(context.Background(), []string{"scan", "--domain", "example.com", "--fail-on", value, "--format", "json"},
 			&stdout, &stderr, scanDependencies("x", fakeProber{}))
 		if code != ExitUsageError || !strings.Contains(stderr.String(), "SCD-0021") {
 			t.Fatalf("--fail-on %q: exit=%d stderr=%s", value, code, stderr.String())
