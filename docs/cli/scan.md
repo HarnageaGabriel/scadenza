@@ -339,9 +339,9 @@ sanitized before it is displayed:
   untrusted detail is never the first thing on a line. The detail is
   sanitized: control and format characters (including bidirectional overrides
   and zero width characters) are removed, tabs and line breaks become a single
-  space, and the detail is capped at 512 characters.
+  space, and the detail is capped at 512 display columns.
 - A table cell and a CSV cell are sanitized the same way and are capped at 256
-  characters.
+  display columns.
 - A CSV cell never contains a line break, so a record is always exactly one
   physical line. A cell that starts with a formula character (`=`, `+`, `-`, or
   `@`) is prefixed with a single quote, so a spreadsheet cannot evaluate it;
