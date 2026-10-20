@@ -384,6 +384,11 @@ func (s *Scanner) namespaces(ctx context.Context) (map[string]namespaceSignals, 
 func (s *Scanner) secrets(ctx context.Context, namespace string, listed *bool) iter.Seq2[corev1.Secret, error] {
 	return paginate(ctx, s.limit(), func(ctx context.Context, options metav1.ListOptions) ([]corev1.Secret, string, error) {
 		options.FieldSelector = tlsSecretFieldSelector
+		// This read (the only one that can carry tls.key) is never logged:
+		// client-go logs full response bodies only at klog verbosity >= 8, and
+		// the scadenza binary never registers klog's -v flag (nor does client-go
+		// read KLOG_V from the environment), so no user can raise verbosity.
+		// TestScanCannotRaiseKlogVerbosity guards that invariant.
 		list, err := s.Clients.Kubernetes.CoreV1().Secrets(namespace).List(ctx, options)
 		if list != nil {
 			for index := range list.Items {

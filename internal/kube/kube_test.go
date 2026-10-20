@@ -12,8 +12,12 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -30,7 +34,9 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	metadatafake "k8s.io/client-go/metadata/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/klog/v2"
 )
 
 const keyMaterial = "SUPERSECRETKEYMATERIAL"
@@ -849,5 +855,128 @@ func TestScope(t *testing.T) {
 		if strings.Join(got, ",") != strings.Join(test.want, ",") {
 			t.Fatalf("scope(%v) = %v, want %v", test.namespaces, got, test.want)
 		}
+	}
+}
+
+// metadataHTTPScanner builds the real metadata client through the same
+// constructor Load uses, pointed at an httptest server. The namespace and
+// cert-manager clients are fakes, so only the Secret metadata path goes over
+// HTTP.
+func metadataHTTPScanner(t *testing.T, server *httptest.Server) *Scanner {
+	t.Helper()
+	client, err := newMetadataClient(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatalf("newMetadataClient: %v", err)
+	}
+	owners, err := owner.ParseConfig(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(Clients{
+		Kubernetes: k8sfake.NewSimpleClientset(),
+		Metadata:   client,
+		Dynamic: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+			schemeWithCertManager(), certManagerListKinds(),
+		),
+	}, Options{Clock: clock.Fixed{Time: testNow}, Owners: owners})
+}
+
+func assertPartialMetadataAccept(t *testing.T, accept string) {
+	t.Helper()
+	if !strings.Contains(accept, "as=PartialObjectMetadataList") {
+		t.Fatalf("Accept = %q; want a PartialObjectMetadataList media type", accept)
+	}
+	for _, part := range strings.Split(accept, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), "application/json") {
+			t.Fatalf("Accept = %q still offers a bare application/json fallback", accept)
+		}
+	}
+}
+
+// TestScanMetadataOnlyAcceptsPartialObjectMetadataList proves a server that
+// honours as=PartialObjectMetadataList is read successfully and that the
+// request never asks for a full object.
+func TestScanMetadataOnlyAcceptsPartialObjectMetadataList(t *testing.T) {
+	var accept string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		accept = request.Header.Get("Accept")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"kind":"PartialObjectMetadataList","apiVersion":"v1","items":[{"metadata":{"name":"db-tls","namespace":"payments","annotations":{"cert-manager.io/certificate-name":"db"}}}]}`)
+	}))
+	defer server.Close()
+
+	result, err := metadataHTTPScanner(t, server).Scan(context.Background())
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(result.Certificates) != 1 {
+		t.Fatalf("certificates = %+v", result.Certificates)
+	}
+	certificate := result.Certificates[0]
+	if certificate.DedupKey != "secret-metadata/payments/db-tls" ||
+		len(certificate.Observations) != 1 || certificate.Observations[0].Source != SourceSecretMetadata {
+		t.Fatalf("metadata certificate = %+v", certificate)
+	}
+	assertPartialMetadataAccept(t, accept)
+}
+
+// TestScanMetadataOnlyRejectsFullSecretList proves a server that ignores the
+// as= parameter and answers with a full SecretList is refused, and that no
+// Secret key material reaches the result, the problems, or the error.
+func TestScanMetadataOnlyRejectsFullSecretList(t *testing.T) {
+	const privateKeyMarker = "PRIVATEKEYBYTESMUSTNOTLEAK"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"kind":"SecretList","apiVersion":"v1","items":[{"metadata":{"name":"db-tls","namespace":"payments"},"data":{"tls.key":"`+privateKeyMarker+`"}}]}`)
+	}))
+	defer server.Close()
+
+	result, err := metadataHTTPScanner(t, server).Scan(context.Background())
+	if len(result.Certificates) != 0 {
+		t.Fatalf("certificates retained from a full SecretList: %+v", result.Certificates)
+	}
+	if len(result.Problems) != 1 || result.Problems[0].Code != CodeUnreachable || result.Problems[0].Resource != "secrets" {
+		t.Fatalf("problems = %+v", result.Problems)
+	}
+	haystack := fmt.Sprint(result)
+	encoded, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	haystack += string(encoded)
+	if err != nil {
+		haystack += err.Error()
+	}
+	if strings.Contains(haystack, privateKeyMarker) {
+		t.Fatalf("Secret key material leaked: %s", haystack)
+	}
+}
+
+// TestScanMetadataOnlyPreservesForbiddenStatus proves the transport does not
+// mask an API error response (the response is checked only on success), so
+// RBAC denials still classify as SCD-0015.
+func TestScanMetadataOnlyPreservesForbiddenStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(writer, `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"secrets is forbidden","reason":"Forbidden","code":403}`)
+	}))
+	defer server.Close()
+
+	result, _ := metadataHTTPScanner(t, server).Scan(context.Background())
+	if len(result.Problems) != 1 || result.Problems[0].Code != CodeForbidden || result.Problems[0].Resource != "secrets" {
+		t.Fatalf("problems = %+v", result.Problems)
+	}
+}
+
+// TestScanCannotRaiseKlogVerbosity guards the invariant that no user can raise
+// klog verbosity to >= 8, where client-go logs full API response bodies
+// (including tls.key) before the Secret data read drops them.
+func TestScanCannotRaiseKlogVerbosity(t *testing.T) {
+	if flag.Lookup("v") != nil {
+		t.Fatal("a -v flag is registered; klog verbosity could be raised to log full response bodies")
+	}
+	if klog.V(8).Enabled() {
+		t.Fatal("klog verbosity is >= 8; full response bodies, including Secret data, would be logged")
 	}
 }

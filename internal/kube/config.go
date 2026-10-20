@@ -45,11 +45,24 @@ func Load(load LoadOptions, scan Options) (Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create dynamic client: %w", err)
 	}
-	metadataClient, err := metadata.NewForConfig(restConfig)
+	metadataClient, err := newMetadataClient(restConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create metadata client: %w", err)
 	}
 	return New(Clients{Kubernetes: kubernetesClient, Metadata: metadataClient, Dynamic: dynamicClient}, scan), nil
+}
+
+// newMetadataClient builds the metadata-only client from a copy of the REST
+// configuration whose AcceptContentTypes allow only the PartialObjectMetadata
+// media types. client-go's metadata constructors reset AcceptContentTypes and
+// its List hardcodes an Accept header with a bare application/json fallback, so
+// partialObjectMetadataTransport enforces the same restriction at the HTTP
+// layer: a response that is not a PartialObjectMetadataList is never retained.
+func newMetadataClient(restConfig *rest.Config) (metadata.Interface, error) {
+	metadataConfig := metadata.ConfigFor(restConfig)
+	metadataConfig.AcceptContentTypes = partialObjectMetadataContentTypes
+	metadataConfig.WrapTransport = partialObjectMetadataTransport
+	return metadata.NewForConfig(metadataConfig)
 }
 
 // restConfig resolves the REST configuration without ever surfacing credentials.
