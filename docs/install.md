@@ -44,6 +44,28 @@ sha256sum --check --ignore-missing checksums.txt
 gh attestation verify "$archive" --repo HarnageaGabriel/scadenza
 ```
 
+### One-command verification
+
+`scripts/verify-release.sh` runs every check above in one command:
+
+```bash
+scripts/verify-release.sh v0.1.0
+```
+
+It downloads the assets, verifies the cosign bundle, the checksum, the SBOM and
+the build provenance, and runs `scadenza version` when the archive matches
+this machine. Draft releases are not reachable over plain HTTPS, so verify one
+with `gh` before publishing it:
+
+```bash
+scripts/verify-release.sh v0.1.0 --gh-download
+```
+
+The script needs `curl`, `sha256sum` (or `shasum -a 256`), `cosign`, `jq` and
+`gh`, and prints `PASS` or `FAIL` for each step. Run
+`scripts/verify-release.sh self-test` to check its argument handling without
+network access.
+
 VERIFY: the exact file names, the certificate identity and the bundle format
 before the first release; this page is written ahead of it and must be
 re-checked against the draft release.
