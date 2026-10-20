@@ -2,8 +2,10 @@
 
 scadenza is a read-only inventory tool. It talks to the network and to
 clusters, it parses data from parties it does not control, and it is often run
-with powerful credentials. This page states what it protects, what it trusts,
-and how each risk is limited. Report weaknesses through [SECURITY.md](../SECURITY.md).
+with powerful credentials. Every destination it can reach, and the bound on
+each request, is listed in [docs/network.md](network.md). This page states what
+it protects, what it trusts, and how each risk is limited. Report weaknesses
+through [SECURITY.md](../SECURITY.md).
 
 ## Assets
 
