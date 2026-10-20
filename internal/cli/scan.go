@@ -105,6 +105,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	var fromCT bool
 	var port, concurrency, maxHosts int
 	var timeout time.Duration
+	var maxDuration time.Duration
 	var format string
 	var kubeEnabled bool
 	var kubeSecrets bool
@@ -130,7 +131,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				}
 				applyScanConfig(command, loaded, &domains, &hosts, &hostsFile, &fromCT, &port,
 					&kubeEnabled, &kubeSecrets, &kubeContext, &namespaces, &ownershipFile, &azureVaults,
-					&failOn, &strict, &minCoverage)
+					&failOn, &strict, &minCoverage, &maxDuration)
 				renewalModes = loaded.Renewal
 			}
 			failOnKinds, failErr := config.ParseFailOn(failOn)
@@ -152,6 +153,10 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			}
 			if port < 1 || port > 65535 || concurrency < 1 || maxHosts < 1 || timeout <= 0 {
 				emitDiagnostic(stderr, "SCD-0001", "invalid --port, --concurrency, --max-hosts, or --timeout")
+				return &commandError{code: ExitUsageError}
+			}
+			if maxDuration < 0 {
+				emitDiagnostic(stderr, "SCD-0001", "--max-duration must not be negative")
 				return &commandError{code: ExitUsageError}
 			}
 			if kubeQPS <= 0 {
@@ -215,15 +220,32 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			now := evaluationClock.Now()
 			diagnostics := &diagnosticSet{items: []diag.Diagnostic{}}
 			unprobed := map[string]string{}
+			// deadlineHit records that the run reached its maximum duration
+			// before it finished, so the deadline is reported exactly once.
+			deadlineHit := false
+			// cutShort names the sources the deadline cut short, so the
+			// coverage says why a source is partial or failed.
+			cutShort := cutShortSources{limit: maxDuration, sources: map[string]bool{}}
+
+			// The maximum duration starts when the command body starts working,
+			// so the deadline is derived here and not at process start. Every
+			// request below runs under it, and an interrupt still wins: the
+			// interrupt cancels the run context and its cause propagates.
+			ctx, cancelRun := deadlineContext(command.Context(), maxDuration)
+			defer cancelRun()
 
 			owners, ownershipErr := loadOwnership(ownershipFile, stderr)
 			if ownershipErr != nil {
 				return &commandError{code: ExitUsageError}
 			}
-			azureState := readAzureKeyVault(command.Context(), dependencies.loadAzure, azureVaults, azureQPS,
+			azureState := readAzureKeyVault(ctx, dependencies.loadAzure, azureVaults, azureQPS,
 				"scadenza/"+version.Current().Version, owners, diagnostics, stderr)
-			if interrupted(command.Context()) {
+			if interrupted(ctx) {
 				return &commandError{code: ExitInterrupted}
+			}
+			if azureState.cutShort {
+				deadlineHit = true
+				cutShort.sources[azurekv.SourceName] = true
 			}
 			ctRequested := ctRequestedFor(fromCT, normalizedDomains)
 			kubeRequested := kubeEnabled
@@ -246,8 +268,8 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 					diagnostics.add(kube.CodeUnreachable, "")
 					emitDiagnostic(stderr, kube.CodeUnreachable, "")
 				} else {
-					scanResult, scanErr := source.Scan(command.Context())
-					if interrupted(command.Context()) {
+					scanResult, scanErr := source.Scan(ctx)
+					if interrupted(ctx) {
 						return &commandError{code: ExitInterrupted}
 					}
 					kubeProblems = len(scanResult.Problems)
@@ -258,8 +280,16 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 					kubeCertificates = scanResult.Certificates
 					kubeAvailable = scanErr == nil
 					if scanErr != nil {
-						diagnostics.add(kube.CodeUnreachable, "")
-						emitDiagnostic(stderr, kube.CodeUnreachable, "")
+						if deadlineExceeded(ctx) {
+							// The run reached its maximum duration, so the
+							// cluster was not read. The deadline diagnostic says
+							// so, and the coverage reports the source as failed.
+							deadlineHit = true
+							cutShort.sources["kube"] = true
+						} else {
+							diagnostics.add(kube.CodeUnreachable, "")
+							emitDiagnostic(stderr, kube.CodeUnreachable, "")
+						}
 					}
 				}
 			}
@@ -275,8 +305,8 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 						name := source.Name()
 						stats := ctStats[name]
 						stats.attempted++
-						found, truncated, searchErr := searchCT(command.Context(), source, ct.Query{Domain: domain, IncludeSubdomains: true, Now: now})
-						if interrupted(command.Context()) {
+						found, truncated, searchErr := searchCT(ctx, source, ct.Query{Domain: domain, IncludeSubdomains: true, Now: now})
+						if interrupted(ctx) {
 							return &commandError{code: ExitInterrupted}
 						}
 						if searchErr == nil {
@@ -305,8 +335,18 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 						code := sourceErrorCode(searchErr)
 						stats.failed++
 						ctStats[name] = stats
-						diagnostics.add(code, name)
-						emitDiagnostic(stderr, code, name)
+						if deadlineExceeded(ctx) {
+							// The run reached its maximum duration, so the
+							// source did not answer. The deadline diagnostic
+							// says so, and the coverage reports the source as
+							// partial or failed, so it is not reported as an
+							// unavailable source as well.
+							deadlineHit = true
+							cutShort.sources[name] = true
+						} else {
+							diagnostics.add(code, name)
+							emitDiagnostic(stderr, code, name)
+						}
 						failed = append(failed, name)
 					}
 				}
@@ -368,9 +408,18 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			for _, target := range derivedTargets {
 				jobs = append(jobs, probeJob{target: target, prober: guardedProber})
 			}
-			live, probeErrors, probed := runProbeJobs(command.Context(), jobs, concurrency)
-			if interrupted(command.Context()) {
+			live, probeErrors, probed := runProbeJobs(ctx, jobs, concurrency)
+			if interrupted(ctx) {
 				return &commandError{code: ExitInterrupted}
+			}
+			if deadlineExceeded(ctx) {
+				// The run reached its limit, so a probe that was still in
+				// flight was stopped and the target it carried was not
+				// checked.
+				deadlineHit = true
+				if len(jobs) > 0 {
+					cutShort.sources["tls"] = true
+				}
 			}
 			for _, probeError := range probeErrors {
 				diagnostics.add("SCD-0010", probeError.Host)
@@ -404,6 +453,16 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 					diagnostics.add("SCD-0013", finding.Fingerprint)
 					emitDiagnostic(stderr, "SCD-0013", findingDetail(finding))
 				}
+			}
+
+			if deadlineHit {
+				// The run was cut short. The document still reports what was
+				// collected, the coverage says which source and target were
+				// not checked, and the deadline is reported once. The detail
+				// names the configured duration and nothing else.
+				detail := "the scan stopped after " + maxDuration.String()
+				diagnostics.add("SCD-0035", detail)
+				emitDiagnostic(stderr, "SCD-0035", detail)
 			}
 
 			sourcesUsed := []string{}
@@ -452,7 +511,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			}
 			coverage := inventory.NewCoverage(len(targets)+capped, probed, len(probeErrors), namesNotChecked,
 				coverageSources(ctRequested, chosen, ctStats, kubeRequested, kubeAvailable, kubeProblems, azureState,
-					len(targets), probed, len(probeErrors)))
+					len(targets), probed, len(probeErrors), cutShort))
 
 			document := render.ScanDocument{
 				SchemaVersion: "scadenza.scan/v1",
@@ -485,7 +544,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				document.Diagnostics = diagnostics.items
 			}
 
-			if err := writeDocument(command.Context(), stdout, func(writer io.Writer) error {
+			if err := writeDocument(ctx, stdout, func(writer io.Writer) error {
 				return render.ScanGrouped(writer, format, document, groupBy)
 			}); err != nil {
 				return err
@@ -519,6 +578,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	command.Flags().IntVar(&port, "port", 443, "default probe port")
 	command.Flags().IntVar(&concurrency, "concurrency", 8, "maximum concurrent probes")
 	command.Flags().DurationVar(&timeout, "timeout", 5*time.Second, "per-probe timeout")
+	command.Flags().DurationVar(&maxDuration, "max-duration", 0, "maximum duration of the whole run (0 means no limit)")
 	command.Flags().StringVar(&format, "format", "table", "output format: table, json, csv")
 	command.Flags().IntVar(&maxHosts, "max-hosts", 200, "maximum hosts to probe")
 	command.Flags().StringSliceVar(&sourceNames, "source", []string{"certspotter", "crtsh"}, "Certificate Transparency source order (certspotter, crtsh)")
@@ -557,10 +617,28 @@ func ownerSummaries(certificates []inventory.Certificate) []renewal.OwnerSummary
 // ctRequested reports whether Certificate Transparency was actually queried.
 func ctRequestedFor(fromCT bool, domains []string) bool { return fromCT && len(domains) > 0 }
 
+// cutShortSources names the sources the maximum duration cut short, and the
+// limit that did it, so the coverage detail says why a source is partial or
+// failed.
+type cutShortSources struct {
+	limit   time.Duration
+	sources map[string]bool
+}
+
+// reason returns the coverage detail suffix for a source the deadline cut
+// short, and an empty string for every other source.
+func (cut cutShortSources) reason(name string) string {
+	if !cut.sources[name] {
+		return ""
+	}
+	return "; the run stopped at the " + cut.limit.String() + " limit"
+}
+
 // coverageSources reports the health of every known source for the coverage
 // object, always including not_requested entries so the set is deterministic.
 func coverageSources(ctRequested bool, chosen []ct.Source, ctStats map[string]ctSourceStats,
 	kubeRequested, kubeAvailable bool, kubeProblems int, azureState azureScanState, targets, probed, failed int,
+	cut cutShortSources,
 ) []inventory.SourceCoverage {
 	chosenNames := map[string]bool{}
 	for _, source := range chosen {
@@ -625,6 +703,7 @@ func coverageSources(ctRequested bool, chosen []ct.Source, ctStats map[string]ct
 				}
 			}
 		}
+		entry.Detail += cut.reason(name)
 		result = append(result, entry)
 	}
 	return result
@@ -711,7 +790,7 @@ func configErrorDetail(err error) string {
 func applyScanConfig(command *cobra.Command, loaded config.Config,
 	domains, hosts *[]string, hostsFile *string, fromCT *bool, port *int,
 	kubeEnabled, kubeSecrets *bool, kubeContext *string, namespaces *[]string, ownershipFile *string,
-	azureVaults *[]string, failOn *string, strict *bool, minCoverage *int,
+	azureVaults *[]string, failOn *string, strict *bool, minCoverage *int, maxDuration *time.Duration,
 ) {
 	if !command.Flags().Changed("domain") && len(loaded.Domains) > 0 {
 		*domains = loaded.Domains
@@ -754,6 +833,9 @@ func applyScanConfig(command *cobra.Command, loaded config.Config,
 	}
 	if !command.Flags().Changed("min-coverage") && loaded.Policy.MinCoverage != nil {
 		*minCoverage = *loaded.Policy.MinCoverage
+	}
+	if !command.Flags().Changed("max-duration") && loaded.MaxDuration != nil {
+		*maxDuration = *loaded.MaxDuration
 	}
 }
 

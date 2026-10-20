@@ -15,6 +15,9 @@ type azureScanState struct {
 	available    bool
 	partial      bool
 	certificates []azurekv.Certificate
+	// cutShort records that the maximum duration stopped the read, so the
+	// coverage says why the source is not ok.
+	cutShort bool
 }
 
 func validateAzureOptions(vaultURLs []string, qps float64, qpsChanged bool, hasTargets, hasKube bool) error {
@@ -74,6 +77,13 @@ func readAzureKeyVault(
 	if scanErr != nil {
 		kind, status, host := azureErrorDetails(scanErr, vaultURLs)
 		if kind == azurekv.ErrorCanceled {
+			if deadlineExceeded(ctx) {
+				// The run reached its maximum duration, so the vault was not
+				// read. The deadline diagnostic says so, and the coverage
+				// reports the source as failed.
+				state.cutShort = true
+				return state
+			}
 			diagnostics.add("SCD-0032", "")
 			emitDiagnostic(stderr, "SCD-0032", azureErrorDetail(status, host))
 			return state
