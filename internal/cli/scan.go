@@ -194,6 +194,11 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			kubeProblems := 0
 			var kubeCertificates []kube.Certificate
 			if kubeEnabled {
+				if kubeSecrets {
+					detail := "namespaces=" + kubeSecretNamespaceDetail(namespaces)
+					diagnostics.add(kube.CodeSecretDataRead, detail)
+					emitDiagnostic(stderr, kube.CodeSecretDataRead, detail)
+				}
 				source, loadErr := dependencies.loadKube(kube.LoadOptions{
 					Context:    kubeContext,
 					Kubeconfig: kubeconfig,
@@ -204,11 +209,6 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 					diagnostics.add(kube.CodeUnreachable, "")
 					emitDiagnostic(stderr, kube.CodeUnreachable, "")
 				} else {
-					if kubeSecrets {
-						detail := "namespaces=" + kubeSecretNamespaceDetail(namespaces)
-						diagnostics.add(kube.CodeSecretDataRead, detail)
-						emitDiagnostic(stderr, kube.CodeSecretDataRead, detail)
-					}
 					scanResult, scanErr := source.Scan(command.Context())
 					kubeProblems = len(scanResult.Problems)
 					for _, problem := range scanResult.Problems {
