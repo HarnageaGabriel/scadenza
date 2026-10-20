@@ -1,0 +1,124 @@
+# Release rehearsal: exercises the release pipeline in CI without publishing,
+# signing or tagging anything.
+#
+# NOT covered here, because only a real tag exercises these:
+#   - cosign signing: keyless signing needs an OIDC identity and would add a
+#     public entry to the transparency log, so the rehearsal skips it.
+#   - the build provenance attestation.
+#   - the GitHub release and the artifacts attached to it.
+name: Release rehearsal
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .goreleaser.yaml
+      - .github/workflows/release.yml
+      - .github/workflows/release-rehearsal.yml
+      - scripts/**
+      - cmd/**
+
+concurrency:
+  group: release-rehearsal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  rehearsal:
+    name: Release snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          # sign is skipped because keyless signing needs an OIDC identity and a
+          # public transparency log entry; the SBOM generation runs for real.
+          args: release --snapshot --clean --skip=sign,publish
+      - name: Verify the snapshot artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd dist || exit 1
+
+          # The checksum file must exist and every artifact it lists must match.
+          test -f checksums.txt
+          sha256sum --check checksums.txt
+
+          # Six archives (linux and darwin as tar.gz, windows as zip, for amd64
+          # and arm64) and exactly one SBOM per archive.
+          shopt -s nullglob
+          archives=(*.tar.gz *.zip)
+          sboms=(*.sbom.json)
+          if [ "${#archives[@]}" -ne 6 ]; then
+            echo "expected 6 archives, found ${#archives[@]}" >&2
+            exit 1
+          fi
+          if [ "${#sboms[@]}" -ne "${#archives[@]}" ]; then
+            echo "expected ${#archives[@]} SBOMs, found ${#sboms[@]}" >&2
+            exit 1
+          fi
+          for archive in "${archives[@]}"; do
+            sbom="${archive}.sbom.json"
+            if [ ! -f "${sbom}" ]; then
+              echo "missing SBOM for ${archive}" >&2
+              exit 1
+            fi
+            if ! jq -e '.spdxVersion' "${sbom}" > /dev/null; then
+              echo "${sbom} is not a valid SPDX JSON document" >&2
+              exit 1
+            fi
+          done
+
+          # The linux/amd64 binary must run and report the snapshot version.
+          snapshot_version=$(jq -r '.version' metadata.json)
+          case "${snapshot_version}" in
+            *-SNAPSHOT-*) ;;
+            *)
+              echo "unexpected snapshot version: ${snapshot_version}" >&2
+              exit 1
+              ;;
+          esac
+          linux_archives=(*_linux_amd64.tar.gz)
+          if [ "${#linux_archives[@]}" -ne 1 ]; then
+            echo "expected exactly one linux/amd64 archive" >&2
+            exit 1
+          fi
+          if [[ "${linux_archives[0]}" != *"${snapshot_version}"* ]]; then
+            echo "${linux_archives[0]} does not carry the snapshot version" >&2
+            exit 1
+          fi
+          extract_dir=$(mktemp -d)
+          tar -xzf "${linux_archives[0]}" -C "${extract_dir}"
+          version_output=$("${extract_dir}/scadenza" version)
+          echo "${version_output}"
+          if ! grep -qF "${snapshot_version}" <<< "${version_output}"; then
+            echo "the binary does not report the snapshot version" >&2
+            exit 1
+          fi
+          reported_version=$(awk 'NR==1 {print $2}' <<< "${version_output}")
+          case "${reported_version}" in
+            dev | unknown | "")
+              echo "the binary reports a placeholder version: ${reported_version}" >&2
+              exit 1
+              ;;
+          esac
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-rehearsal-dist
+          path: |
+            dist/*.json
+            dist/checksums.txt
+          retention-days: 3
+          if-no-files-found: error
