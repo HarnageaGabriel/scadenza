@@ -29,9 +29,10 @@ checksum:
 
 sboms:
   - artifacts: archive
-    # VERIFY: confirm the configured SBOM tool is available in the release image.
+    # GoReleaser substitutes ${artifact} and ${document}; the release rehearsal
+    # workflow proves syft runs with these arguments.
     cmd: syft
-    args: ["{{ .ArtifactPath }}", "-o", "spdx-json={{ .Output }}"]
+    args: ["${artifact}", "--output", "spdx-json=${document}"]
 
 signs:
   - artifacts: checksum
