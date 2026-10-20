@@ -47,6 +47,25 @@ type Source interface {
 	Search(context.Context, Query) ([]Certificate, error)
 }
 
+// MaxEntries is the default cap on the entries received for one query. It
+// applies when the caller leaves Query.Limit unset; a caller that sets a
+// limit keeps it and the cap never shortens it.
+const MaxEntries = 50000
+
+// Result holds the entries collected for one query and reports whether the
+// source stopped before it was exhausted.
+type Result struct {
+	Certificates []Certificate `json:"certificates"`
+	Truncated    bool          `json:"truncated"`
+}
+
+// TruncatingSource is implemented by sources that report query truncation.
+// A caller that needs to surface truncation type-asserts a Source to this
+// interface and calls SearchResult.
+type TruncatingSource interface {
+	SearchResult(context.Context, Query) (Result, error)
+}
+
 // ErrorKind classifies recoverable source failures.
 type ErrorKind string
 

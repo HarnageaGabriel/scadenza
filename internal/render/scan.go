@@ -81,6 +81,12 @@ func ScanGrouped(writer io.Writer, format string, document ScanDocument, groupBy
 			document.Findings[index].Names = emptyIfNil(document.Findings[index].Names)
 		}
 		encoder := json.NewEncoder(writer)
+		// JSON is data, not display: it must carry the exact values a consumer
+		// reads back, so it is never truncated or sanitized. HTML escaping stays
+		// off because a JSON consumer is not a browser, and escaping would
+		// rewrite legitimate characters such as <, >, and &. The encoder always
+		// escapes control characters itself, so the output stays one valid
+		// document.
 		encoder.SetEscapeHTML(false)
 		return encoder.Encode(document)
 	case "csv":
@@ -103,20 +109,22 @@ func writeScanCSV(writer io.Writer, certificates []inventory.Certificate) error 
 			observations = []inventory.Observation{{}}
 		}
 		for _, observation := range observations {
+			// Every text cell is sanitized first, so a record is always exactly
+			// one physical line, and then guarded against formula injection.
 			row := []string{
-				csvSafe(certificate.Fingerprint),
-				csvSafe(certificate.Serial),
-				csvSafe(strings.Join(certificate.Names, " ")),
-				csvSafe(certificate.Issuer),
+				csvCell(certificate.Fingerprint),
+				csvCell(certificate.Serial),
+				csvCell(strings.Join(certificate.Names, " ")),
+				csvCell(certificate.Issuer),
 				certificate.NotBefore.Format(time.RFC3339),
 				certificate.NotAfter.Format(time.RFC3339),
 				strconv.Itoa(certificate.LifetimeDays),
-				csvSafe(certificate.Verdict100D),
+				csvCell(certificate.Verdict100D),
 				publicText(certificate.Public),
-				csvSafe(observation.Source),
-				csvSafe(observation.Location),
-				csvSafe(observation.Detail),
-				csvSafe(displayOwners(certificate.Owners)),
+				csvCell(observation.Source),
+				csvCell(observation.Location),
+				csvCell(observation.Detail),
+				csvCell(displayOwners(certificate.Owners)),
 			}
 			if err := output.Write(row); err != nil {
 				return err

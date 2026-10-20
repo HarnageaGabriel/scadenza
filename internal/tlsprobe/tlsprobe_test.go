@@ -520,3 +520,241 @@ func TestProbeSystemRootsErrorSurfaced(t *testing.T) {
 		t.Fatalf("roots error not surfaced: trusted=%v verifyError=%q", result.Trusted, result.VerifyError)
 	}
 }
+
+// stubResolver answers every name with the same fixed set of addresses, so a
+// test can decide what a host name resolves to.
+type stubResolver struct {
+	mu        sync.Mutex
+	calls     int
+	addresses []string
+}
+
+func (r *stubResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	result := make([]net.IPAddr, 0, len(r.addresses))
+	for _, address := range r.addresses {
+		result = append(result, net.IPAddr{IP: net.ParseIP(address)})
+	}
+	return result, nil
+}
+
+func (r *stubResolver) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// recordingDialer records every address the probe asks it to dial. When
+// target is set it connects there instead, so a test can complete a handshake
+// for an address no test server listens on.
+type recordingDialer struct {
+	mu     sync.Mutex
+	dialed []string
+	target string
+}
+
+func (d *recordingDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	d.mu.Lock()
+	d.dialed = append(d.dialed, address)
+	d.mu.Unlock()
+	if d.target == "" {
+		return nil, errors.New("test dialer refuses to connect")
+	}
+	var dialer net.Dialer
+	return dialer.DialContext(ctx, network, d.target)
+}
+
+func (d *recordingDialer) dialedAddresses() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.dialed...)
+}
+
+// TestSpecialAddressReasonBlocksSpecialAddresses proves the guard rejects
+// every special address, including the IPv4-mapped and IPv4-compatible IPv6
+// forms, and keeps the private ranges an internal estate needs.
+func TestSpecialAddressReasonBlocksSpecialAddresses(t *testing.T) {
+	blocked := []string{
+		"127.0.0.1",
+		"127.1.2.3",
+		"::1",
+		"169.254.169.254",
+		"::ffff:169.254.169.254",
+		"::ffff:127.0.0.1",
+		"fe80::1",
+		"0.0.0.0",
+		"::",
+		"224.0.0.1",
+		"ff02::1",
+		"0.1.2.3",
+	}
+	for _, address := range blocked {
+		ip := net.ParseIP(address)
+		if ip == nil {
+			t.Fatalf("test address %q does not parse", address)
+		}
+		if specialAddressReason(ip) == "" {
+			t.Fatalf("address %q was not blocked", address)
+		}
+	}
+
+	allowed := []string{"10.0.0.1", "172.16.0.1", "192.168.1.1", "fd00::1", "8.8.8.8"}
+	for _, address := range allowed {
+		ip := net.ParseIP(address)
+		if ip == nil {
+			t.Fatalf("test address %q does not parse", address)
+		}
+		if reason := specialAddressReason(ip); reason != "" {
+			t.Fatalf("address %q was blocked as %q", address, reason)
+		}
+	}
+}
+
+// TestFilterSpecialAddressesKeepsAllowedAddresses proves the filter drops only
+// the special addresses, keeps the order of the rest, and reports the first
+// rejected address with its reason.
+func TestFilterSpecialAddressesKeepsAllowedAddresses(t *testing.T) {
+	allowed, blocked := filterSpecialAddresses([]string{"10.0.0.1", "127.0.0.1", "8.8.8.8", "169.254.169.254"})
+	if strings.Join(allowed, ",") != "10.0.0.1,8.8.8.8" {
+		t.Fatalf("allowed = %v", allowed)
+	}
+	if blocked.Address != "127.0.0.1" {
+		t.Fatalf("blocked address = %q, want the first rejected address", blocked.Address)
+	}
+	if blocked.Reason != "a loopback address" {
+		t.Fatalf("blocked reason = %q", blocked.Reason)
+	}
+}
+
+// TestProbeBlocksSpecialAddresses proves a host that resolves only to special
+// addresses is never dialed and fails with its own class. The error names the
+// host and the reason, and never a resolver answer beyond the rejected
+// address itself.
+func TestProbeBlocksSpecialAddresses(t *testing.T) {
+	dialer := &recordingDialer{}
+	resolver := &stubResolver{addresses: []string{"127.0.0.1", "169.254.169.254"}}
+	prober := &Prober{
+		Clock:                 clock.Fixed{Time: testNow},
+		Timeout:               2 * time.Second,
+		Resolver:              resolver,
+		Dialer:                dialer,
+		BlockSpecialAddresses: true,
+	}
+	result, err := prober.Probe(context.Background(), "metadata.example.test", 443, "")
+	if class(err) != ClassBlockedAddress {
+		t.Fatalf("blocked probe class = %v (err=%v)", class(err), err)
+	}
+	if len(dialer.dialedAddresses()) != 0 {
+		t.Fatalf("probe dialed %v", dialer.dialedAddresses())
+	}
+	if len(result.IPs) != 0 {
+		t.Fatalf("result.IPs = %v, want no dialed address", result.IPs)
+	}
+	text := err.Error()
+	if !strings.Contains(text, "metadata.example.test") {
+		t.Fatalf("error text %q does not name the host", text)
+	}
+	if !strings.Contains(text, "loopback") {
+		t.Fatalf("error text %q does not name the reason", text)
+	}
+	if strings.Contains(text, "169.254.169.254") {
+		t.Fatalf("error text %q leaked another resolver answer", text)
+	}
+}
+
+// TestProbeBlocksSpecialAddressIPLiteral proves an IP literal host is checked
+// the same way as a resolved name, and that the cloud metadata address is
+// never dialed.
+func TestProbeBlocksSpecialAddressIPLiteral(t *testing.T) {
+	dialer := &recordingDialer{}
+	prober := &Prober{
+		Clock:                 clock.Fixed{Time: testNow},
+		Timeout:               2 * time.Second,
+		Dialer:                dialer,
+		BlockSpecialAddresses: true,
+	}
+	_, err := prober.Probe(context.Background(), "169.254.169.254", 80, "")
+	if class(err) != ClassBlockedAddress {
+		t.Fatalf("blocked literal class = %v (err=%v)", class(err), err)
+	}
+	if len(dialer.dialedAddresses()) != 0 {
+		t.Fatalf("probe dialed %v", dialer.dialedAddresses())
+	}
+	if !strings.Contains(err.Error(), "link-local") {
+		t.Fatalf("error text %q does not name the reason", err.Error())
+	}
+}
+
+// TestProbeProbesAllowedAddressWhenAnotherIsBlocked proves a host that
+// resolves to one blocked and one allowed address still probes the allowed
+// address, that the blocked address is never dialed, and that the probe dials
+// the address it resolved instead of resolving the name again.
+func TestProbeProbesAllowedAddressWhenAnotherIsBlocked(t *testing.T) {
+	_, _, leaf := signedCertificate(t, leafTemplate([]string{"mixed.example.test"}, 90*24*time.Hour), nil, nil)
+	host, port := serve(t, &tls.Config{Certificates: []tls.Certificate{leaf}})
+	dialer := &recordingDialer{target: fmt.Sprintf("%s:%d", host, port)}
+	resolver := &stubResolver{addresses: []string{"127.0.0.1", "203.0.113.10"}}
+	prober := &Prober{
+		Clock:                 clock.Fixed{Time: testNow},
+		Timeout:               5 * time.Second,
+		Resolver:              resolver,
+		Dialer:                dialer,
+		BlockSpecialAddresses: true,
+	}
+	result, err := prober.Probe(context.Background(), "mixed.example.test", port, "mixed.example.test")
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if len(result.IPs) != 1 || result.IPs[0] != "203.0.113.10" {
+		t.Fatalf("result.IPs = %v, want the allowed address", result.IPs)
+	}
+	dialed := dialer.dialedAddresses()
+	if len(dialed) != 1 || dialed[0] != fmt.Sprintf("203.0.113.10:%d", port) {
+		t.Fatalf("dialed = %v, want only the allowed address", dialed)
+	}
+	if resolver.count() != 1 {
+		t.Fatalf("resolver called %d times, want exactly one resolution", resolver.count())
+	}
+}
+
+// TestProbeWithoutGuardBlocksNothing proves the guard is off by default: a
+// name that resolves to a special address is still dialed and the blocked
+// class never appears.
+func TestProbeWithoutGuardBlocksNothing(t *testing.T) {
+	_, _, leaf := signedCertificate(t, leafTemplate([]string{"open.example.test"}, 90*24*time.Hour), nil, nil)
+	host, port := serve(t, &tls.Config{Certificates: []tls.Certificate{leaf}})
+	dialer := &recordingDialer{target: fmt.Sprintf("%s:%d", host, port)}
+	prober := &Prober{
+		Clock:    clock.Fixed{Time: testNow},
+		Timeout:  5 * time.Second,
+		Resolver: &stubResolver{addresses: []string{"127.0.0.1", "169.254.169.254"}},
+		Dialer:   dialer,
+	}
+	result, err := prober.Probe(context.Background(), "open.example.test", port, "open.example.test")
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if len(result.IPs) != 2 {
+		t.Fatalf("result.IPs = %v, want every resolved address", result.IPs)
+	}
+	dialed := dialer.dialedAddresses()
+	if len(dialed) != 1 || dialed[0] != fmt.Sprintf("127.0.0.1:%d", port) {
+		t.Fatalf("dialed = %v, want the first resolved address", dialed)
+	}
+}
+
+func TestFilterSpecialAddressesFailsClosed(t *testing.T) {
+	allowed, blocked := filterSpecialAddresses([]string{"not-an-ip", "fe80::1%eth0", "10.0.0.1"})
+	if len(allowed) != 1 || allowed[0] != "10.0.0.1" {
+		t.Fatalf("allowed = %v, want only the private address", allowed)
+	}
+	if blocked.Address != "not-an-ip" || blocked.Reason == "" {
+		t.Fatalf("blocked = %+v, want the unparseable address first", blocked)
+	}
+	allowed, blocked = filterSpecialAddresses([]string{"fe80::1%eth0"})
+	if len(allowed) != 0 || blocked.Address != "fe80::1%eth0" {
+		t.Fatalf("zoned link-local address was allowed: allowed=%v blocked=%+v", allowed, blocked)
+	}
+}
