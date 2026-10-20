@@ -26,7 +26,9 @@ fromCT: true
 port: 443
 
 kube:
-  enabled: false
+  # Read the Kubernetes source. Every other key in this block requires it: a
+  # file that sets one of them while enabled is false is a usage error.
+  enabled: true
   # Read tls.crt from TLS Secrets. Off by default; requires enabled: true.
   # Emits SCD-0029 naming the namespaces whose Secret data may be read.
   secrets: false
@@ -98,6 +100,11 @@ unknown `policy.failOn` list, a `renewal` key that is not a valid domain, a
 `renewal` value other than `manual`, or `none` combined with another kind is a
 usage error (exit 2). Unknown keys and bad values are reported as `SCD-0022`; a
 bad `failOn` kind is reported as `SCD-0021`.
+
+The same combination is checked after the file is merged with the command line:
+`kube.secrets`, `kube.context`, `kube.namespaces`, or `kube.ownershipFile` set
+while the Kubernetes source is off is a usage error (exit 2, `SCD-0001`), the
+same as the matching flags without `--kube`.
 
 The file must be a regular file and is read under a 1 MiB cap, so a directory,
 a named pipe, a device, or an oversized file is a usage error (exit 2) instead
