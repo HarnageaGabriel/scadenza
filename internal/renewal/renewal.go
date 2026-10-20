@@ -235,9 +235,11 @@ type KeyVault struct {
 }
 
 // Issuance is one Certificate Transparency issuance for cadence evidence. The
-// identity fields let cadence collapse the precertificate and the final
-// certificate of the same issuance, and the duplicate records that overlapping
-// domain queries return.
+// name set, notBefore, issuer, and serial are the identity fields that let
+// cadence collapse the precertificate and the final certificate of the same
+// issuance, and the duplicate records that overlapping domain queries return.
+// The fingerprint identifies the record, not the issuance: the precertificate
+// and the final certificate of one issuance have different fingerprints.
 type Issuance struct {
 	Names       []string
 	NotBefore   time.Time
@@ -494,8 +496,11 @@ func healthOf(in Input, manager *Manager, hazardousIssuer, keyVaultAutomatic boo
 // certificate's name set. It is evidence only, never a classification. Records
 // are first deduplicated by stable issuance identity, so a precertificate and
 // its final certificate, or the duplicate records that overlapping domain
-// queries return, count once. The 365-day window is a fixed 365*24h ending at
-// the evaluation instant, and a record issued after that instant is ignored.
+// queries return, count once. The remaining issuances that follow one another
+// by less than an hour are collapsed into the earlier one, because a
+// certificate is not renewed twice within an hour. The 365-day window is a
+// fixed 365*24h ending at the evaluation instant, and a record issued after
+// that instant is ignored.
 func cadence(in Input) []Evidence {
 	names := map[string]bool{}
 	for _, name := range in.Names {
@@ -503,7 +508,6 @@ func cadence(in Input) []Evidence {
 	}
 	seen := map[string]bool{}
 	instants := []time.Time{}
-	recent := 0
 	cutoff := in.Now.Add(-365 * 24 * time.Hour)
 	for _, issuance := range in.CT {
 		if issuance.NotBefore.IsZero() || issuance.NotBefore.After(in.Now) || !intersects(issuance.Names, names) {
@@ -515,19 +519,47 @@ func cadence(in Input) []Evidence {
 		}
 		seen[identity] = true
 		instants = append(instants, issuance.NotBefore)
-		if !issuance.NotBefore.Before(cutoff) {
-			recent++
-		}
 	}
+	instants = collapseNearbyIssuances(instants)
 	if len(instants) == 0 {
 		return nil
 	}
-	sort.SliceStable(instants, func(i, j int) bool { return instants[i].Before(instants[j]) })
+	recent := 0
+	for _, instant := range instants {
+		if !instant.Before(cutoff) {
+			recent++
+		}
+	}
 	result := []Evidence{{Source: SourceCT, Fact: FactCTIssuances365d, Value: strconv.Itoa(recent)}}
-	if median, ok := medianIntervalDays(instants); ok {
+	// The median is the interval between distinct issuances. A median of zero
+	// days would read as "renew every zero days", which is not a cadence, so
+	// it is never emitted.
+	if median, ok := medianIntervalDays(instants); ok && median > 0 {
 		result = append(result, Evidence{Source: SourceCT, Fact: FactCTMedianIntervalDays, Value: strconv.Itoa(median)})
 	}
 	return result
+}
+
+// minimumIssuanceGap is the smallest gap between two issuances that can be two
+// separate renewals: a certificate is not renewed twice within an hour.
+const minimumIssuanceGap = time.Hour
+
+// collapseNearbyIssuances returns the issuance instants that are far enough
+// apart to be separate renewals, oldest first. An issuance that follows the
+// previous kept one by less than an hour is collapsed into the earlier one: it
+// is the same renewal described by another record, and counting it twice would
+// report a median interval of zero days.
+func collapseNearbyIssuances(instants []time.Time) []time.Time {
+	sorted := append([]time.Time(nil), instants...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Before(sorted[j]) })
+	kept := make([]time.Time, 0, len(sorted))
+	for _, instant := range sorted {
+		if len(kept) > 0 && instant.Sub(kept[len(kept)-1]) < minimumIssuanceGap {
+			continue
+		}
+		kept = append(kept, instant)
+	}
+	return kept
 }
 
 // configRisks returns the findings that come from the certificate's own
@@ -843,23 +875,26 @@ func durationLabel(value string) string {
 	return value
 }
 
-// issuanceIdentity is the stable identity of one issuance. A precertificate and
-// its final certificate share the issuer and serial, so serial (with issuer)
-// wins; a record with no serial falls back to its fingerprint, then to its name
-// set and notBefore.
+// issuanceIdentity is the stable identity of one issuance. A precertificate
+// and its final certificate are two log entries of one issuance: with a serial
+// they share the issuer and serial, so the serial (with the issuer) is the
+// identity. A record without a serial (Cert Spotter carries none) is
+// identified by its normalized name set, its notBefore, and its issuer
+// instead, so the precertificate and the final certificate still count once.
+// The fingerprint is never part of the identity: the two records of one
+// issuance have different fingerprints.
 func issuanceIdentity(issuance Issuance) string {
 	if serial := strings.ToLower(strings.TrimSpace(issuance.Serial)); serial != "" {
 		return "serial:" + normalizeName(issuance.Issuer) + "|" + serial
-	}
-	if fingerprint := strings.ToLower(strings.TrimSpace(issuance.Fingerprint)); fingerprint != "" {
-		return "fp:" + fingerprint
 	}
 	names := make([]string, 0, len(issuance.Names))
 	for _, name := range issuance.Names {
 		names = append(names, normalizeName(name))
 	}
 	sort.Strings(names)
-	return "names:" + strings.Join(names, ",") + "|" + issuance.NotBefore.UTC().Format(time.RFC3339)
+	return "names:" + strings.Join(names, ",") + "|" +
+		issuance.NotBefore.UTC().Truncate(time.Second).Format(time.RFC3339) + "|" +
+		normalizeName(issuance.Issuer)
 }
 
 // parseTime parses an RFC 3339 timestamp as written in a Kubernetes status.
