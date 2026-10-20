@@ -141,6 +141,17 @@ Kubernetes source unavailable. A 403 is a partial warning when at least one
 requested Secret or Certificate list succeeds; if none succeeds, the source is
 unavailable. An empty successful list still counts as a successful source read.
 
+Every API request is bounded by a 30 second timeout, so an API server that
+stops answering fails the request instead of hanging the scan.
+
+### Kubeconfig exec credential plugins
+
+A kubeconfig user entry can carry an `exec` block, and the client library runs
+that command to obtain a token. The plugin runs with the permissions of the
+user running scadenza, and scadenza does not restrict what the plugin may do:
+it is an arbitrary program named by the kubeconfig. In CI, use a dedicated
+kubeconfig that has no exec plugin and point `--kubeconfig` at it.
+
 Run the source against a cluster (the CI-only kind test does this):
 
 ```sh
