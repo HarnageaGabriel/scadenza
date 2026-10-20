@@ -125,7 +125,7 @@ func readBounded(reader io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if int64(len(data)) > MaxBodyBytes {
-		return nil, ErrBodyTooLarge
+		return nil, fmt.Errorf("read response: %w", ErrBodyTooLarge)
 	}
 	return data, nil
 }

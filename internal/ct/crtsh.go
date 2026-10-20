@@ -36,7 +36,7 @@ func (s *CrtSH) Search(ctx context.Context, query Query) ([]Certificate, error) 
 	status, _, body, err := s.Client.Do(ctx, request)
 	if err != nil {
 		if errors.Is(err, httpx.ErrBodyTooLarge) {
-			return nil, malformed(s.Name(), err)
+			return nil, malformed(s.Name(), fmt.Errorf("oversized crtsh response: %w", err))
 		}
 		return nil, unavailable(s.Name(), err)
 	}
@@ -48,6 +48,23 @@ func (s *CrtSH) Search(ctx context.Context, query Query) ([]Certificate, error) 
 		return nil, malformed(s.Name(), err)
 	}
 	return result, nil
+}
+
+// SearchResult returns normalized crt.sh records and reports whether the
+// query stopped before the source was exhausted.
+func (s *CrtSH) SearchResult(ctx context.Context, query Query) (Result, error) {
+	certificates, err := s.Search(ctx, query)
+	if err != nil {
+		return Result{}, err
+	}
+	entryCap := query.Limit
+	if entryCap < MaxEntries {
+		entryCap = MaxEntries
+	}
+	if len(certificates) > entryCap {
+		return Result{Certificates: certificates[:entryCap], Truncated: true}, nil
+	}
+	return Result{Certificates: certificates}, nil
 }
 
 type crtSHRecord struct {
