@@ -10,6 +10,7 @@ import (
 	"iter"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,15 +29,60 @@ type scanner struct {
 	clock       clock.Clock
 }
 
-// ValidateVaultURL accepts only a clean HTTPS Key Vault URI. No credential or
-// secret value is accepted anywhere in the configuration surface.
+// vaultUserinfoMarker replaces the userinfo of a rejected vault URI.
+const vaultUserinfoMarker = "redacted"
+
+// ValidateVaultURL accepts only a clean HTTPS Key Vault URI. The value is
+// used exactly as given and is never trimmed: a URI with leading or trailing
+// whitespace is rejected instead of being silently corrected, because the
+// same string is used for the request and for the reported vault host. No
+// credential or secret value is accepted anywhere in the configuration
+// surface.
 func ValidateVaultURL(raw string) error {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if strings.TrimSpace(raw) != raw {
+		return invalidVaultURI(raw)
+	}
+	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" ||
 		parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
-		return errors.New("vault URI must be an https:// vault host without a path, query, or credentials")
+		return invalidVaultURI(raw)
 	}
 	return nil
+}
+
+// invalidVaultURI builds the rejection error for one vault URI.
+func invalidVaultURI(raw string) error {
+	return &VaultURIError{Value: sanitizeVaultURI(raw)}
+}
+
+// sanitizeVaultURI renders a rejected vault URI for a diagnostic. The value is
+// quoted, so whitespace and control characters are visible and cannot forge a
+// diagnostic line, and any userinfo is redacted, so a credential typed into
+// the URI is never echoed.
+func sanitizeVaultURI(raw string) string {
+	return strconv.Quote(redactVaultUserinfo(raw))
+}
+
+// redactVaultUserinfo replaces the userinfo of a vault URI with a fixed
+// marker. The authority ends at the first path, query, or fragment, and the
+// userinfo is everything before the last "@" in it.
+func redactVaultUserinfo(raw string) string {
+	start := 0
+	rest := raw
+	if scheme := strings.Index(raw, "://"); scheme >= 0 {
+		start = scheme + len("://")
+		rest = raw[start:]
+	}
+	end := strings.IndexAny(rest, "/?#")
+	authority, tail := rest, ""
+	if end >= 0 {
+		authority, tail = rest[:end], rest[end:]
+	}
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return raw
+	}
+	return raw[:start] + vaultUserinfoMarker + authority[at:] + tail
 }
 
 // Load creates the production source using only the Azure default credential

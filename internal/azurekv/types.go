@@ -5,6 +5,7 @@ package azurekv
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/HarnageaGabriel/scadenza/internal/clock"
@@ -137,6 +138,27 @@ type Error struct {
 func (e *Error) Error() string {
 	return string(e.Problem.Kind)
 }
+
+// ErrInvalidVaultURI marks a vault URI that is not a clean HTTPS Key Vault
+// host. The rejected value is reported in a sanitized form, so a diagnostic
+// can name it without echoing a credential.
+var ErrInvalidVaultURI = errors.New("vault URI must be an https:// vault host without a path, query, or credentials")
+
+// VaultURIError reports one rejected vault URI. It wraps ErrInvalidVaultURI,
+// so callers classify it with errors.Is instead of comparing error text.
+type VaultURIError struct {
+	// Value is the sanitized offending value: it is quoted, so a control
+	// character cannot forge a diagnostic line, and any userinfo is redacted.
+	Value string
+}
+
+// Error names the rejected value.
+func (e *VaultURIError) Error() string {
+	return ErrInvalidVaultURI.Error() + ": " + e.Value
+}
+
+// Unwrap makes errors.Is(err, ErrInvalidVaultURI) true.
+func (e *VaultURIError) Unwrap() error { return ErrInvalidVaultURI }
 
 // Source is the read-only scan surface consumed by the CLI.
 type Source interface {
