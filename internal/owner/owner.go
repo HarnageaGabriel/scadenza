@@ -1,18 +1,17 @@
 // Package owner resolves certificate ownership from Kubernetes object labels,
 // annotations, namespaces, and an optional mapping file. It is pure: it performs
 // no I/O, reads no clock, and never infers an owner that was not explicitly
-// declared. See docs/ownership.md for the human-facing rules.
+// declared. The mapping file is decoded with the shared input guard, which
+// reads no file either. See docs/ownership.md for the human-facing rules.
 package owner
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
-	"gopkg.in/yaml.v3"
+	"github.com/HarnageaGabriel/scadenza/internal/safefile"
 )
 
 // Source records where an owner value was found, so attribution is auditable.
@@ -36,6 +35,12 @@ const (
 // when an ownership file lists it.
 const ManagedByKey = "app.kubernetes.io/managed-by"
 
+// MaxOwnerValueLength caps an owner value that comes from the mapping file.
+// The cap is the length of a DNS name, which is longer than any value a
+// Kubernetes label can carry, so a longer value is a mistake or an attack
+// rather than a team name.
+const MaxOwnerValueLength = 253
+
 // defaultLabelKeys are consulted when the ownership file lists no labelKeys.
 var defaultLabelKeys = []string{"scadenza.io/owner"}
 
@@ -56,15 +61,17 @@ type Config struct {
 // ParseConfig decodes an ownership mapping file. Unknown fields are rejected so
 // that a typo cannot silently disable ownership, and keys and values are
 // normalized. An empty document yields the documented defaults.
+//
+// The input must hold exactly one YAML document, and the document may not nest
+// deeper than safefile.MaxYAMLDepth. An owner value that is longer than
+// MaxOwnerValueLength is rejected instead of being truncated.
 func ParseConfig(data []byte) (Config, error) {
 	var document struct {
 		LabelKeys  []string          `yaml:"labelKeys"`
 		Domains    map[string]string `yaml:"domains"`
 		Namespaces map[string]string `yaml:"namespaces"`
 	}
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&document); err != nil && !errors.Is(err, io.EOF) {
+	if err := safefile.DecodeYAML(data, &document); err != nil {
 		return Config{}, fmt.Errorf("decode ownership file: %w", err)
 	}
 	domains, err := normalizeMap(document.Domains, true)
@@ -210,6 +217,10 @@ func normalizeMap(values map[string]string, domains bool) (map[string]string, er
 		value = strings.TrimSpace(value)
 		if key == "" || value == "" {
 			continue
+		}
+		if length := utf8.RuneCountInString(value); length > MaxOwnerValueLength {
+			return nil, fmt.Errorf("owner value for %q is %d characters, over the %d character limit",
+				key, length, MaxOwnerValueLength)
 		}
 		if previous, exists := originals[key]; exists {
 			return nil, fmt.Errorf("duplicate normalized key %q from %q and %q", key, previous, original)

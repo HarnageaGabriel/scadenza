@@ -72,7 +72,9 @@ policy:
 
 Relative `hostsFile` and `kube.ownershipFile` paths are resolved against the
 directory containing the configuration file, not the process working directory.
-Absolute paths are used unchanged.
+Absolute paths are used unchanged. Paths are used as given: a relative path is
+resolved against the configuration file's directory, and a path may point
+anywhere the user can read.
 
 ## Precedence
 
@@ -96,3 +98,8 @@ unknown `policy.failOn` list, a `renewal` key that is not a valid domain, a
 `renewal` value other than `manual`, or `none` combined with another kind is a
 usage error (exit 2). Unknown keys and bad values are reported as `SCD-0022`; a
 bad `failOn` kind is reported as `SCD-0021`.
+
+The file must be a regular file and is read under a 1 MiB cap, so a directory,
+a named pipe, a device, or an oversized file is a usage error (exit 2) instead
+of a hang. The file must hold exactly one YAML document, and the document may
+not nest deeper than 64 levels.
