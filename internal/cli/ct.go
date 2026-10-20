@@ -181,9 +181,13 @@ func emitDiagnosticSeverity(writer io.Writer, code, detail string, severity diag
 	}
 	suffix := ""
 	if strings.TrimSpace(detail) != "" {
-		suffix = ": " + detail
+		suffix = ": " + render.SafeText(detail)
 	}
-	_, _ = fmt.Fprintf(writer, "%s [%s] %s%s\n", item.Severity, item.Code, item.Summary, suffix)
+	// The line starts with the diagnostic code, so the untrusted detail is
+	// never the first thing on a line, and SafeText keeps the detail from
+	// carrying a line break, a terminal escape, or a forged log line of its
+	// own.
+	_, _ = fmt.Fprintf(writer, "%s [%s] %s%s\n", item.Code, item.Severity, item.Summary, suffix)
 }
 
 func exitCode(err error) int {

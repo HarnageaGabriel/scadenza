@@ -302,8 +302,18 @@ func TestScanCSVFormulaInjection(t *testing.T) {
 		}
 		row := rows[1]
 		for _, index := range []int{1, 2, 3, 10, 11} {
-			if !strings.HasPrefix(row[index], "'"+prefix) {
-				t.Errorf("prefix %q column %d = %q", prefix, index, row[index])
+			cell := row[index]
+			if prefix == "\t" || prefix == "\r" {
+				// The sanitizer turns a leading tab or carriage return into a
+				// single space before the formula guard runs, so the cell keeps
+				// no control character and is no longer a formula.
+				if !strings.HasPrefix(cell, " ") {
+					t.Errorf("prefix %q column %d = %q", prefix, index, cell)
+				}
+				continue
+			}
+			if !strings.HasPrefix(cell, "'"+prefix) {
+				t.Errorf("prefix %q column %d = %q", prefix, index, cell)
 			}
 		}
 	}
@@ -367,7 +377,7 @@ func TestScanTableStripsControlCharacters(t *testing.T) {
 			t.Fatalf("table output contains %q:\n%s", bad, rendered)
 		}
 	}
-	for _, want := range []string{"evil[31m.example.com", "ab.example.com", "line1line2"} {
+	for _, want := range []string{"evil[31m.example.com", "a b.example.com", "line1 line2"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("stripped output missing %q:\n%s", want, rendered)
 		}

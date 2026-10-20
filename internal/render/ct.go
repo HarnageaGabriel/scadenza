@@ -9,6 +9,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
 	"github.com/HarnageaGabriel/scadenza/internal/diag"
@@ -35,6 +37,12 @@ func CT(writer io.Writer, format string, document CTDocument) error {
 			document.Certificates[index].SubjectNames = emptyIfNil(document.Certificates[index].SubjectNames)
 		}
 		encoder := json.NewEncoder(writer)
+		// JSON is data, not display: it must carry the exact values a consumer
+		// reads back, so it is never truncated or sanitized. HTML escaping stays
+		// off because a JSON consumer is not a browser, and escaping would
+		// rewrite legitimate characters such as <, >, and &. The encoder always
+		// escapes control characters itself, so the output stays one valid
+		// document.
 		encoder.SetEscapeHTML(false)
 		return encoder.Encode(document)
 	case "csv":
@@ -56,7 +64,9 @@ func writeCSV(writer io.Writer, certificates []ct.Certificate) error {
 		if certificate.Revoked != nil {
 			revoked = fmt.Sprint(*certificate.Revoked)
 		}
-		if err := output.Write([]string{csvSafe(certificate.Fingerprint), csvSafe(certificate.Serial), csvSafe(strings.Join(certificate.SubjectNames, " ")), csvSafe(certificate.Issuer), certificate.NotBefore.Format(time.RFC3339), certificate.NotAfter.Format(time.RFC3339), fmt.Sprint(certificate.LifetimeDays), certificate.Verdict100D, revoked, csvSafe(certificate.Source)}); err != nil {
+		// Every text cell is sanitized first, so a record is always exactly one
+		// physical line, and then guarded against formula injection.
+		if err := output.Write([]string{csvCell(certificate.Fingerprint), csvCell(certificate.Serial), csvCell(strings.Join(certificate.SubjectNames, " ")), csvCell(certificate.Issuer), certificate.NotBefore.Format(time.RFC3339), certificate.NotAfter.Format(time.RFC3339), fmt.Sprint(certificate.LifetimeDays), csvCell(certificate.Verdict100D), csvCell(revoked), csvCell(certificate.Source)}); err != nil {
 			return err
 		}
 	}
@@ -64,9 +74,33 @@ func writeCSV(writer io.Writer, certificates []ct.Certificate) error {
 	return output.Error()
 }
 
-// csvSafe neutralizes spreadsheet formula injection by prefixing a single quote.
+// csvCell sanitizes an untrusted value and neutralizes spreadsheet formula
+// injection in it, so a cell is one physical line, cannot be a formula, and
+// stays within the cell cap.
+func csvCell(value string) string {
+	return capRunes(csvSafe(sanitizeCell(value)), MaxCellRunes)
+}
+
+// csvSafe neutralizes spreadsheet formula injection by prefixing a single
+// quote. The value is sanitized before it gets here, so it can no longer
+// contain a line break; the guard still covers a value that starts with a tab
+// or a carriage return, and it looks past leading whitespace, so a cell that
+// starts with spaces or a non breaking space before a formula character is
+// guarded as well.
 func csvSafe(value string) string {
-	if value != "" && strings.ContainsRune("=+-@	", rune(value[0])) {
+	if value == "" {
+		return value
+	}
+	first, _ := utf8.DecodeRuneInString(value)
+	if strings.ContainsRune("=+-@\t\r", first) {
+		return "'" + value
+	}
+	trimmed := strings.TrimLeftFunc(value, unicode.IsSpace)
+	if trimmed == "" {
+		return value
+	}
+	leading, _ := utf8.DecodeRuneInString(trimmed)
+	if strings.ContainsRune("=+-@", leading) {
 		return "'" + value
 	}
 	return value
@@ -89,7 +123,7 @@ func writeTable(writer io.Writer, certificates []ct.Certificate) error {
 			sanitizeCell(certificate.Verdict100D),
 			sanitizeCell(certificate.Fingerprint),
 			sanitizeCell(certificate.Serial),
-			revoked,
+			sanitizeCell(revoked),
 			sanitizeCell(certificate.Issuer),
 			sanitizeCell(displayNames(certificate.SubjectNames)),
 			sanitizeCell(certificate.Source),
