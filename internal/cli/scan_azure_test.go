@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -120,4 +122,53 @@ func runAzureRead(t *testing.T, vaults []string, source azurekv.Source) (azureSc
 	loader := func(azurekv.LoadOptions) (azurekv.Source, error) { return source, nil }
 	state := readAzureKeyVault(context.Background(), loader, vaults, 1000, "test", owner.Config{}, diagnostics, &stderr)
 	return state, stderr.String()
+}
+
+// paddedVaultURIs are vault URIs with surrounding whitespace. They are
+// rejected instead of trimmed, so the diagnostic has to name the value.
+var paddedVaultURIs = []struct {
+	name  string
+	value string
+}{
+	{name: "trailing space", value: "https://demo.vault.azure.net "},
+	{name: "leading space", value: " https://demo.vault.azure.net"},
+	{name: "trailing newline", value: "https://demo.vault.azure.net\n"},
+}
+
+func TestScanRejectsVaultURIWithSurroundingWhitespace(t *testing.T) {
+	for _, test := range paddedVaultURIs {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := execute([]string{"scan", "--azure-keyvault", test.value}, &stdout, &stderr, scanDependencies("x", fakeProber{}))
+			if code != ExitUsageError {
+				t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "SCD-0001") {
+				t.Fatalf("stderr=%s", stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "demo.vault.azure.net") {
+				t.Fatalf("the diagnostic does not name the vault URI: %s", stderr.String())
+			}
+		})
+	}
+}
+
+func TestScanRejectsConfigVaultURIWithSurroundingWhitespace(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "scadenza.yaml")
+	document := "version: 1\nazure:\n  keyVaults: [\"https://demo.vault.azure.net \"]\n"
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{"scan", "--config", path}, &stdout, &stderr, scanDependencies("x", fakeProber{}))
+	if code != ExitUsageError {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "SCD-0001") {
+		t.Fatalf("stderr=%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "demo.vault.azure.net") {
+		t.Fatalf("the diagnostic does not name the vault URI: %s", stderr.String())
+	}
 }

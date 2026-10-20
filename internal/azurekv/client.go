@@ -32,6 +32,15 @@ type azcorePager struct {
 	more     func() bool
 }
 
+// perTryTimeout bounds a single HTTP try against a Key Vault. The scan
+// command context carries no deadline, so without it a hung vault would block
+// a scan forever.
+const perTryTimeout = 30 * time.Second
+
+// maxRetries is the number of retries after the first try. Three is the
+// azcore default and bounds a failing vault to four attempts.
+const maxRetries = 3
+
 func newDefaultCredential() (azcore.TokenCredential, error) {
 	return azidentity.NewDefaultAzureCredential(nil)
 }
@@ -45,12 +54,21 @@ func newSDKAPI(factory credentialFactory, userAgent string) *sdkAPI {
 }
 
 func newSDKAPIWithOptions(factory credentialFactory, options *azcertificates.ClientOptions) *sdkAPI {
-	if options == nil {
-		options = &azcertificates.ClientOptions{}
+	local := azcertificates.ClientOptions{}
+	if options != nil {
+		local = *options
+	}
+	// A hung vault must not hang a scan: bound every try and cap the retries.
+	// A caller that injects its own values keeps them.
+	if local.Retry.TryTimeout == 0 {
+		local.Retry.TryTimeout = perTryTimeout
+	}
+	if local.Retry.MaxRetries == 0 {
+		local.Retry.MaxRetries = maxRetries
 	}
 	return &sdkAPI{
 		newCredential: factory,
-		options:       options,
+		options:       &local,
 		clients:       map[string]*azcertificates.Client{},
 		pagers:        map[string]*azcorePager{},
 	}

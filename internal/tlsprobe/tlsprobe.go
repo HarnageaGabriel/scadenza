@@ -43,6 +43,9 @@ const (
 	ClassNoCertificate ErrorClass = "no-certificate"
 	// ClassHandshakeFailed means any other handshake failure.
 	ClassHandshakeFailed ErrorClass = "handshake-failed"
+	// ClassBlockedAddress means every resolved address of the host was
+	// rejected by the special-address guard, so no address was dialed.
+	ClassBlockedAddress ErrorClass = "blocked-address"
 )
 
 // errNoCertificate reports a handshake that yielded no leaf certificate.
@@ -61,7 +64,15 @@ type Error struct {
 }
 
 // Error implements error without printing peer-supplied data.
-func (e *Error) Error() string { return fmt.Sprintf("probe %s:%d: %s", e.Host, e.Port, e.Class) }
+func (e *Error) Error() string {
+	// The blocked-address class names the rejected address and the reason it
+	// was rejected, so the operator can see which address stopped the probe.
+	// Every other class keeps the short form.
+	if e.Class == ClassBlockedAddress && e.Err != nil {
+		return fmt.Sprintf("probe %s:%d: %s: %s", e.Host, e.Port, e.Class, e.Err)
+	}
+	return fmt.Sprintf("probe %s:%d: %s", e.Host, e.Port, e.Class)
+}
 
 // Unwrap returns the underlying cause.
 func (e *Error) Unwrap() error { return e.Err }
@@ -97,12 +108,29 @@ type Result struct {
 }
 
 // Prober is a configurable TLS handshake issuer.
+//
+// BlockSpecialAddresses guards against a host name that comes from untrusted
+// Certificate Transparency data resolving to a special address such as
+// loopback or the cloud metadata address 169.254.169.254. RFC 1918 private
+// ranges and IPv6 unique local addresses are deliberately still probed: an
+// internal estate is a legitimate scan target.
 type Prober struct {
 	Timeout  time.Duration
 	Dialer   Dialer
 	Resolver IPResolver
 	Roots    *x509.CertPool
 	Clock    clock.Clock
+	// BlockSpecialAddresses rejects every resolved address that names a
+	// special address before any dial happens: loopback, link-local unicast,
+	// link-local multicast, interface-local multicast, multicast, the
+	// unspecified address (0.0.0.0 and ::), and everything in 0.0.0.0/8,
+	// including the IPv4-mapped and IPv4-compatible IPv6 forms of each.
+	//
+	// RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+	// and IPv6 unique local addresses (fc00::/7) are not blocked, because an
+	// internal estate is a legitimate scan target. The default is false, so a
+	// name the user typed keeps its current behaviour.
+	BlockSpecialAddresses bool
 }
 
 // New returns a prober with the default five second timeout.
@@ -116,7 +144,12 @@ func Probe(ctx context.Context, host string, port int, sni string) (Result, erro
 // Probe performs one handshake and returns the presented leaf certificate.
 // It resolves the host, dials, handshakes, and closes without sending any
 // application bytes. On failure the returned Result carries the host, port,
-// resolved addresses, and the classified error class.
+// the addresses that were dialed, and the classified error class.
+//
+// When BlockSpecialAddresses is set, every resolved address is checked before
+// the first dial. An address that names a special address is never dialed,
+// the remaining addresses are still probed, and a host whose addresses are all
+// rejected fails with ClassBlockedAddress.
 func (p *Prober) Probe(ctx context.Context, host string, port int, sni string) (Result, error) {
 	result := Result{Host: host, Port: port, SNI: sni}
 	if result.SNI == "" && net.ParseIP(host) == nil {
@@ -137,12 +170,25 @@ func (p *Prober) Probe(ctx context.Context, host string, port int, sni string) (
 	if len(addresses) == 0 {
 		return result, &Error{Class: ClassDNS, Host: host, Port: port, Err: errors.New("host resolved to no addresses")}
 	}
-	result.IPs = addresses
+	dialAddresses := addresses
+	if p.BlockSpecialAddresses {
+		allowed, blocked := filterSpecialAddresses(addresses)
+		if len(allowed) == 0 {
+			return result, &Error{
+				Class: ClassBlockedAddress,
+				Host:  host,
+				Port:  port,
+				Err:   fmt.Errorf("address %s is %s", blocked.Address, blocked.Reason),
+			}
+		}
+		dialAddresses = allowed
+	}
+	result.IPs = dialAddresses
 	dialer := p.Dialer
 	if dialer == nil {
 		dialer = &net.Dialer{Timeout: p.Timeout}
 	}
-	connection, err := dialResolved(ctx, dialer, addresses, port)
+	connection, err := dialResolved(ctx, dialer, dialAddresses, port)
 	if err != nil {
 		return result, &Error{Class: classifyDial(ctx, err), Host: host, Port: port, Err: err}
 	}
@@ -175,6 +221,107 @@ func dialResolved(ctx context.Context, dialer Dialer, addresses []string, port i
 		lastErr = errors.New("no address to dial")
 	}
 	return nil, lastErr
+}
+
+// blockedAddress names a resolved address the probe refuses to dial and the
+// reason it was rejected.
+type blockedAddress struct {
+	Address string
+	Reason  string
+}
+
+// filterSpecialAddresses splits resolved addresses into the ones that may be
+// dialed and the first address that was rejected, with the reason it was
+// rejected. The order of the addresses is preserved, so the surviving
+// addresses are dialed in the order they resolved.
+func filterSpecialAddresses(addresses []string) ([]string, blockedAddress) {
+	allowed := make([]string, 0, len(addresses))
+	var blocked blockedAddress
+	for _, address := range addresses {
+		// A zone suffix (fe80::1%eth0) is not part of the address. An address
+		// that still does not parse is refused: the guard fails closed.
+		literal, _, _ := strings.Cut(address, "%")
+		ip := net.ParseIP(literal)
+		if ip == nil {
+			if blocked.Address == "" {
+				blocked = blockedAddress{Address: address, Reason: "an unparseable address"}
+			}
+			continue
+		}
+		reason := specialAddressReason(ip)
+		if reason == "" {
+			allowed = append(allowed, address)
+			continue
+		}
+		if blocked.Address == "" {
+			blocked = blockedAddress{Address: address, Reason: reason}
+		}
+	}
+	return allowed, blocked
+}
+
+// specialAddressReason reports why an address is a special address the probe
+// refuses to dial, or an empty string when the address may be dialed.
+//
+// The blocked set is loopback, link-local unicast, link-local multicast,
+// interface-local multicast, multicast, the unspecified address (0.0.0.0 and
+// ::), and every address in 0.0.0.0/8, together with the IPv4-mapped
+// (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d) IPv6 forms of each.
+//
+// RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) and
+// IPv6 unique local addresses (fc00::/7) are deliberately not blocked: an
+// internal estate is a legitimate scan target.
+func specialAddressReason(ip net.IP) string {
+	if ip == nil {
+		return ""
+	}
+	if reason := addressReason(ip); reason != "" {
+		return reason
+	}
+	if embedded := embeddedIPv4(ip); embedded != nil {
+		return addressReason(embedded)
+	}
+	return ""
+}
+
+// addressReason classifies one address form.
+func addressReason(ip net.IP) string {
+	switch {
+	case ip.IsUnspecified():
+		return "an unspecified address"
+	case ip.IsLoopback():
+		return "a loopback address"
+	case ip.IsLinkLocalUnicast():
+		return "a link-local unicast address"
+	case ip.IsLinkLocalMulticast():
+		return "a link-local multicast address"
+	case ip.IsInterfaceLocalMulticast():
+		return "an interface-local multicast address"
+	case ip.IsMulticast():
+		return "a multicast address"
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 0 {
+		return "in the 0.0.0.0/8 range"
+	}
+	return ""
+}
+
+// embeddedIPv4 returns the IPv4 address carried by an IPv4-mapped
+// (::ffff:a.b.c.d) or IPv4-compatible (::a.b.c.d) IPv6 address, and nil for
+// every other address.
+func embeddedIPv4(ip net.IP) net.IP {
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4
+	}
+	if len(ip) != net.IPv6len {
+		return nil
+	}
+	for _, b := range ip[:12] {
+		if b != 0 {
+			return nil
+		}
+	}
+	return ip[12:16]
 }
 
 // handshake reads the peer chain. In-connection verification is disabled on
