@@ -296,6 +296,69 @@ func TestValidationAndHelpers(t *testing.T) {
 	}
 }
 
+// paddedVaultURIs are vault URIs with surrounding whitespace. They are
+// rejected instead of trimmed, because the same string is used for the
+// request and for the reported vault host.
+var paddedVaultURIs = []struct {
+	name  string
+	value string
+}{
+	{name: "trailing space", value: "https://demo.vault.azure.net "},
+	{name: "leading space", value: " https://demo.vault.azure.net"},
+	{name: "trailing newline", value: "https://demo.vault.azure.net\n"},
+	{name: "leading space and trailing newline", value: " https://demo.vault.azure.net\n"},
+	{name: "non breaking space", value: "https://demo.vault.azure.net\u00a0"},
+}
+
+func TestValidateVaultURLRejectsSurroundingWhitespace(t *testing.T) {
+	for _, test := range paddedVaultURIs {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateVaultURL(test.value)
+			if !errors.Is(err, ErrInvalidVaultURI) {
+				t.Fatalf("ValidateVaultURL(%q) err = %v, want ErrInvalidVaultURI", test.value, err)
+			}
+			var uriErr *VaultURIError
+			if !errors.As(err, &uriErr) {
+				t.Fatalf("err = %v, want a *VaultURIError", err)
+			}
+			if !strings.Contains(uriErr.Value, "demo.vault.azure.net") {
+				t.Fatalf("the error does not name the value: %v", err)
+			}
+			if host, err := ParseVaultHost(test.value); err == nil {
+				t.Fatalf("ParseVaultHost(%q) = %q, want an error", test.value, host)
+			}
+			_, err = NewSource(&fakeAPI{}, LoadOptions{VaultURLs: []string{test.value}})
+			if err == nil {
+				t.Fatalf("NewSource accepted %q", test.value)
+			}
+			var sourceErr *Error
+			if !errors.As(err, &sourceErr) || sourceErr.Problem.Kind != ErrorInvalid {
+				t.Fatalf("NewSource err = %v, want an invalid source error", err)
+			}
+		})
+	}
+}
+
+func TestValidateVaultURLErrorNamesTheValueSafely(t *testing.T) {
+	err := ValidateVaultURL("https://user:secret@demo.vault.azure.net\n")
+	if err == nil {
+		t.Fatal("accepted a vault URI with credentials and a trailing newline")
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Fatalf("the error carries a raw newline: %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatalf("the error leaked the credential: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "demo.vault.azure.net") {
+		t.Fatalf("the error does not name the value: %q", err.Error())
+	}
+	var uriErr *VaultURIError
+	if !errors.As(err, &uriErr) || !strings.Contains(uriErr.Value, "redacted@demo.vault.azure.net") {
+		t.Fatalf("value = %q, want the redacted host", uriErr.Value)
+	}
+}
+
 type staticCredential struct{}
 
 func (staticCredential) GetToken(context.Context, policy.TokenRequestOptions) (azcore.AccessToken, error) {
