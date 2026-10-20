@@ -66,8 +66,8 @@ The script needs `curl`, `sha256sum` (or `shasum -a 256`), `cosign`, `jq` and
 `scripts/verify-release.sh self-test` to check its argument handling without
 network access.
 
-VERIFY: the exact file names, the certificate identity and the bundle format
-before the first release; this page is written ahead of it and must be
-re-checked against the draft release.
+The exact file names, the certificate identity and the bundle format were
+confirmed against a real release run on 2026-10-20, which used a test tag.
+Re-check them against each draft release before you publish it.
 
 Never run a binary whose signature or checksum does not verify.
