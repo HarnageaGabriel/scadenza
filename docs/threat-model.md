@@ -30,8 +30,8 @@ and how each risk is limited. Report weaknesses through [SECURITY.md](../SECURIT
 
 | Risk | Mitigation |
 | --- | --- |
-| Private keys or tokens leak into output | `tls.key` is dropped before parsing and never read. The planned Key Vault source reads certificates as public CER only and never calls the secret or key endpoints. Errors are structured (status, reason, resource), never raw client text. Tests plant fake keys and tokens and assert they never appear in any stream. |
-| Reading more than needed | Only `list` and `get` verbs. Kubernetes reads Secret metadata only by default; Secret data needs the explicit `--kube-secrets` flag and a separate RBAC manifest. Minimal manifests in `deploy/rbac/`. |
+| Private keys or tokens leak into output | `tls.key` is dropped before parsing and never read. The Key Vault source reads certificates as public CER only and never calls the secret or key endpoints: `internal/azurekv` exposes only list, get-certificate and get-policy. Key Vault diagnostics carry only the HTTP status and the vault host. Errors are structured (status, reason, resource), never raw client text. Tests plant fake keys and tokens and assert they never appear in any stream. |
+| Reading more than needed | Only `list` and `get` verbs. Kubernetes reads Secret metadata only by default; Secret data needs the explicit `--kube-secrets` flag and a separate RBAC manifest. Key Vault needs only certificate `get` and `list` permissions (see [docs/azure.md](azure.md)). Minimal manifests in `deploy/rbac/`. |
 | Scanning what the user did not name | Only named domains and hosts, plus host names found in Certificate Transparency under a named domain. No IP ranges. Wildcard names are never probed. `--max-hosts` caps the derived set, and capped hosts are reported as not checked. |
 | A hostile TLS server | The handshake never sends application data; certificate verification is run separately against the system roots and the result is recorded, not acted on. Timeouts, concurrency limits and response size caps apply. |
 | Hostile or malformed input | Strict parsers with fuzz targets (CT decoders, PEM chains, host and domain parsing, configuration and ownership files). Bounded response bodies and pagination. |
@@ -39,7 +39,7 @@ and how each risk is limited. Report weaknesses through [SECURITY.md](../SECURIT
 | A partial scan that looks clean | Coverage is reported, `--strict` and `--min-coverage` fail incomplete scans, and unchecked names are `not_checked`, never silently dropped (see [exit codes](exit-codes.md)). |
 | CSV or terminal injection from untrusted names | CSV cells that start with a formula character are neutralised and control characters are stripped from table output. |
 | Compromised release | Releases are built by GitHub Actions from a tag, checksummed, signed with keyless cosign and attested; actions are pinned to full commit SHAs; releases start as drafts. See [docs/release.md](release.md). |
-| Vulnerable dependency | `govulncheck`, Dependabot, CodeQL and OpenSSF Scorecard run in CI. |
+| Vulnerable dependency | `govulncheck`, Dependabot, CodeQL and OpenSSF Scorecard run in CI. The vulnerability scan builds with the Go version pinned in `go.mod`, the same toolchain the releases are built with. |
 
 ## Out of scope
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HarnageaGabriel/scadenza/internal/azurekv"
 	"github.com/HarnageaGabriel/scadenza/internal/clock"
 	"github.com/HarnageaGabriel/scadenza/internal/config"
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
@@ -81,6 +82,8 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	var kubeContext, kubeconfig, ownershipFile string
 	var namespaces []string
 	var kubeQPS float64
+	var azureVaults []string
+	var azureQPS float64
 	var strict bool
 	var minCoverage int
 	var failOn, nowFlag, configPath, groupBy string
@@ -97,7 +100,8 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 					return &commandError{code: ExitUsageError}
 				}
 				applyScanConfig(command, loaded, &domains, &hosts, &hostsFile, &fromCT, &port,
-					&kubeEnabled, &kubeSecrets, &kubeContext, &namespaces, &ownershipFile, &failOn, &strict, &minCoverage)
+					&kubeEnabled, &kubeSecrets, &kubeContext, &namespaces, &ownershipFile, &azureVaults,
+					&failOn, &strict, &minCoverage)
 				renewalModes = loaded.Renewal
 			}
 			failOnKinds, failErr := config.ParseFailOn(failOn)
@@ -139,8 +143,9 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				emitDiagnostic(stderr, "SCD-0001", err.Error())
 				return &commandError{code: ExitUsageError}
 			}
-			if len(normalizedDomains) == 0 && len(hosts) == 0 && len(fileTokens) == 0 && !kubeEnabled {
-				emitDiagnostic(stderr, "SCD-0001", "supply at least one --domain, --host, --hosts-file, or --kube")
+			if err := validateAzureOptions(azureVaults, azureQPS, command.Flags().Changed("azure-qps"),
+				len(normalizedDomains) > 0 || len(hosts) > 0 || len(fileTokens) > 0, kubeEnabled); err != nil {
+				emitDiagnostic(stderr, "SCD-0001", err.Error())
 				return &commandError{code: ExitUsageError}
 			}
 			explicitTargets, err := parseTargets(append(append([]string{}, hosts...), fileTokens...), port)
@@ -181,6 +186,8 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			if ownershipErr != nil {
 				return &commandError{code: ExitUsageError}
 			}
+			azureState := readAzureKeyVault(command.Context(), dependencies.loadAzure, azureVaults, azureQPS,
+				"scadenza/"+version.Version, owners, diagnostics, stderr)
 			ctRequested := ctRequestedFor(fromCT, normalizedDomains)
 			kubeRequested := kubeEnabled
 			kubeAvailable := false
@@ -301,6 +308,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				Domains:      normalizedDomains,
 				CT:           records,
 				Kube:         kubeCertificates,
+				Azure:        azureState.certificates,
 				Live:         live,
 				Errors:       probeErrors,
 				RenewalModes: renewalModes,
@@ -329,6 +337,9 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			if kubeRequested && kubeAvailable {
 				sourcesUsed = append(sourcesUsed, "kube")
 			}
+			if azureState.requested && azureState.available {
+				sourcesUsed = append(sourcesUsed, azurekv.SourceName)
+			}
 			sort.Strings(sourcesUsed)
 
 			unresolved := make([]inventory.Unresolved, 0, len(unprobed))
@@ -356,7 +367,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				}
 			}
 			coverage := inventory.NewCoverage(len(targets)+capped, probed, len(probeErrors), namesNotChecked,
-				coverageSources(ctRequested, chosen, ctStats, kubeRequested, kubeAvailable, kubeProblems,
+				coverageSources(ctRequested, chosen, ctStats, kubeRequested, kubeAvailable, kubeProblems, azureState,
 					len(targets), probed, len(probeErrors)))
 
 			document := render.ScanDocument{
@@ -376,6 +387,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 			sourceUnavailable := sourcesUnavailable(
 				sourceState{requested: ctRequested, available: ctAvailable},
 				sourceState{requested: kubeRequested, available: kubeAvailable},
+				sourceState{requested: azureState.requested, available: azureState.available},
 			)
 			blocking := blockingFinding(failOnKinds, findings)
 			incompleteDetail, incomplete := incompleteScan(strict, minCoverage, coverage, findings, unresolved)
@@ -431,9 +443,11 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	command.Flags().StringArrayVar(&namespaces, "namespace", nil, "namespace to read; repeatable; default all namespaces")
 	command.Flags().StringVar(&ownershipFile, "ownership-file", "", "YAML file mapping domains, namespaces, and label keys to owners")
 	command.Flags().Float64Var(&kubeQPS, "kube-qps", 5, "Kubernetes client request rate per second")
+	command.Flags().StringArrayVar(&azureVaults, "azure-keyvault", nil, "Azure Key Vault URI to read certificates from, read-only; repeatable")
+	command.Flags().Float64Var(&azureQPS, "azure-qps", 5, "Azure Key Vault request rate per second")
 	command.Flags().BoolVar(&strict, "strict", false, "exit 5 when any source is partial or failed, any probe failed, or any item was not checked")
 	command.Flags().IntVar(&minCoverage, "min-coverage", 0, "exit 5 when the coverage ratio is below this percentage (0-100)")
-	command.Flags().StringVar(&failOn, "fail-on", "live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded", "comma list of finding kinds that cause exit 3: ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, renewal-config-invalid, none")
+	command.Flags().StringVar(&failOn, "fail-on", "live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded", "comma list of finding kinds that cause exit 3: ct_only, live_only, exceeds-100d, not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded, renew-before-loop-at-next-limit, duration-exceeds-next-limit, manual-renewal-after-limit, renewal-config-invalid, keyvault-validity-exceeds-next-limit, keyvault-renew-trigger-exceeds-lifetime, none")
 	command.Flags().StringVar(&groupBy, "group-by", render.GroupNone, "table grouping: owner, names, or none (JSON is unchanged)")
 	command.Flags().StringVar(&nowFlag, "now", "", "evaluation instant as an RFC 3339 timestamp; defaults to the current time")
 	command.Flags().StringVar(&configPath, "config", "", "explicit YAML configuration file; never auto-loaded")
@@ -460,16 +474,18 @@ func ctRequestedFor(fromCT bool, domains []string) bool { return fromCT && len(d
 // coverageSources reports the health of every known source for the coverage
 // object, always including not_requested entries so the set is deterministic.
 func coverageSources(ctRequested bool, chosen []ct.Source, ctStats map[string]ctSourceStats,
-	kubeRequested, kubeAvailable bool, kubeProblems, targets, probed, failed int,
+	kubeRequested, kubeAvailable bool, kubeProblems int, azureState azureScanState, targets, probed, failed int,
 ) []inventory.SourceCoverage {
 	chosenNames := map[string]bool{}
 	for _, source := range chosen {
 		chosenNames[source.Name()] = true
 	}
-	result := make([]inventory.SourceCoverage, 0, 4)
-	for _, name := range []string{"certspotter", "crtsh", "kube", "tls"} {
+	result := make([]inventory.SourceCoverage, 0, 5)
+	for _, name := range []string{"certspotter", "crtsh", "kube", azurekv.SourceName, "tls"} {
 		entry := inventory.SourceCoverage{Name: name, Status: inventory.SourceStatusNotRequested, Detail: "not requested"}
 		switch name {
+		case azurekv.SourceName:
+			entry = azureCoverage(azureState.requested, azureState.available, azureState.partial)
 		case "certspotter", "crtsh":
 			if ctRequested && chosenNames[name] {
 				stats, attempted := ctStats[name]
@@ -601,7 +617,7 @@ func configErrorDetail(err error) string {
 func applyScanConfig(command *cobra.Command, loaded config.Config,
 	domains, hosts *[]string, hostsFile *string, fromCT *bool, port *int,
 	kubeEnabled, kubeSecrets *bool, kubeContext *string, namespaces *[]string, ownershipFile *string,
-	failOn *string, strict *bool, minCoverage *int,
+	azureVaults *[]string, failOn *string, strict *bool, minCoverage *int,
 ) {
 	if !command.Flags().Changed("domain") && len(loaded.Domains) > 0 {
 		*domains = loaded.Domains
@@ -632,6 +648,9 @@ func applyScanConfig(command *cobra.Command, loaded config.Config,
 	}
 	if !command.Flags().Changed("ownership-file") && loaded.Kube.OwnershipFile != "" {
 		*ownershipFile = loaded.Kube.OwnershipFile
+	}
+	if !command.Flags().Changed("azure-keyvault") && len(loaded.Azure.KeyVaults) > 0 {
+		*azureVaults = loaded.Azure.KeyVaults
 	}
 	if !command.Flags().Changed("fail-on") && len(loaded.Policy.FailOn) > 0 {
 		*failOn = strings.Join(loaded.Policy.FailOn, ",")

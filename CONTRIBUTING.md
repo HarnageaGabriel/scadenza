@@ -27,12 +27,23 @@ make cover-floors
 ## Pull requests
 
 `main` is protected: every change lands through a pull request that is squash
-merged, with a linear history, and the required checks (tests on Linux and
-macOS, lint and generated files, vulnerability scan, GoReleaser configuration,
-CodeQL) must pass on a branch that is up to date with `main`. The end-to-end
-job on kind runs on every pull request too; it is not required because it
-downloads external artifacts, but a failure must be explained in the pull request. Open a draft pull request early. Keep changes focused, link the issue
-and describe what you tested.
+merged, and the required checks must pass on a branch that is up to date with
+`main`. The required status checks are:
+
+- `Test (ubuntu-latest)`
+- `Test (macos-latest)`
+- `Lint and generated files`
+- `Vulnerability scan`
+- `GoReleaser configuration`
+- `Analyze Go` (CodeQL)
+- `signoff` (DCO)
+
+The end-to-end job on kind runs on every pull request too; it is not required
+because it downloads external artifacts, but a failure must be explained in the
+pull request.
+
+Open a draft pull request early. Keep changes focused, link the issue and
+describe what you tested.
 
 ## Security
 

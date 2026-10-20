@@ -50,15 +50,14 @@ the manual ones before renewals have to happen four times a year.
 
 It merges sources that existing open-source scanners look at one at a time:
 Certificate Transparency logs (what was issued), live TLS handshakes (what is
-served) and Kubernetes with cert-manager (what is managed). Azure Key Vault is
-planned. Certificates are correlated by fingerprint: one certificate, every place
-it appears. scadenza is free software under Apache-2.0 and will stay free.
+served), Kubernetes with cert-manager (what is managed) and Azure Key Vault
+(what the vault holds). Certificates are correlated by fingerprint: one
+certificate, every place it appears. scadenza is free software under Apache-2.0
+and will stay free.
 
 > [!WARNING]
 > scadenza is **pre-alpha**. There is no tagged release yet, and the JSON
-> schema may still change before 0.1.0. Renewal classification (automatic,
-> manual, unknown) is not implemented yet; today scadenza reports where
-> certificates are and how long they live.
+> schema may still change before 0.1.0.
 
 ## Try it now
 
@@ -134,8 +133,8 @@ exists today.
 | `scadenza scan`: TLS handshakes with SNI, fingerprint correlation, `ct_only` / `live_only` | Done | M2 |
 | Kubernetes TLS Secrets and cert-manager `Certificate` resources, ownership mapping | Done | M3 |
 | Reliable results: coverage, `--strict`, `--fail-on`, dated time rules, JSON contract tests | Done | M4a |
-| Renewal classification with evidence: mode (automatic, manual, unknown) and health | Planned | M4b |
-| Kubernetes without reading Secrets by default; Azure Key Vault | Planned | M5 |
+| Renewal classification with evidence: mode (automatic, manual, unknown) and health | Done | M4b |
+| Kubernetes without reading Secrets by default; Azure Key Vault | Done | M5 |
 | Releases: GoReleaser, Homebrew, krew | Planned | M6 / 0.1.0 |
 
 ## How it works
@@ -164,7 +163,7 @@ Design decisions are recorded as [ADRs](docs/adr/).
 
 ## Getting started
 
-Requires Go 1.26.5 or later until the first release ships binaries.
+Requires Go 1.26.9 or later until the first release ships binaries.
 
 ```sh
 go install github.com/HarnageaGabriel/scadenza/cmd/scadenza@latest
@@ -205,11 +204,13 @@ The plan to 0.1.0 is recorded in [ADR 0006](docs/adr/0006-roadmap-to-0.1.0.md).
 - **M4a, reliable results.** A partial scan must never look like a clean one:
   coverage is reported, `--strict` and `--min-coverage` fail incomplete scans,
   and `--fail-on` chooses which findings fail CI.
-- **M4b, renewal classification.** Automatic, manual or unknown, plus whether
-  automatic renewal is healthy, with the evidence for each answer. Automatic
-  renewal configured in a way that breaks under short lifetimes is a finding.
-- **M5, Kubernetes and cloud.** Kubernetes without reading Secret data by
-  default, then Azure Key Vault with read-only credentials.
+- **M4b, renewal classification.** Every certificate reports how it is renewed
+  (automatic, manual or unknown) and whether that renewal is healthy, with the
+  evidence for each answer. Automatic renewal configured in a way that breaks
+  under short lifetimes is a finding.
+- **M5, Kubernetes and cloud.** Kubernetes is read without Secret data by
+  default, and Azure Key Vault certificates are read with read-only
+  credentials.
 - **M6, 0.1.0.** Binaries built with GoReleaser on GitHub Releases, Homebrew,
   checksums and CI examples.
 

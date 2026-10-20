@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HarnageaGabriel/scadenza/internal/azurekv"
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
 	"github.com/HarnageaGabriel/scadenza/internal/kube"
 	"github.com/HarnageaGabriel/scadenza/internal/owner"
@@ -63,6 +64,8 @@ const (
 	SourceKubeSecret = kube.SourceSecret
 	// SourceCertManager marks facts read from a cert-manager Certificate.
 	SourceCertManager = kube.SourceCertManager
+	// SourceAzureKeyVault marks facts read from an Azure Key Vault certificate.
+	SourceAzureKeyVault = azurekv.SourceName
 )
 
 // VerdictNotApplicable is reported when the 100-day rule does not apply, for
@@ -77,6 +80,9 @@ type Observation struct {
 	// Kubernetes carries the raw Kubernetes and cert-manager facts, when the
 	// observation was read from a cluster.
 	Kubernetes *kube.Kubernetes `json:"kubernetes,omitempty"`
+	// KeyVault carries the additive read-only certificate policy and identity
+	// facts when the observation came from Azure Key Vault.
+	KeyVault *azurekv.Facts `json:"azure_keyvault,omitempty"`
 }
 
 // Certificate is one correlated certificate.
@@ -134,6 +140,7 @@ type Input struct {
 	Domains []string
 	CT      []ct.Certificate
 	Kube    []kube.Certificate
+	Azure   []azurekv.Certificate
 	Live    []tlsprobe.Result
 	Errors  []ProbeError
 	// RenewalModes maps a domain to an explicitly declared renewal mode from
@@ -149,6 +156,8 @@ type accumulator struct {
 	hasCT        bool
 	hasLive      bool
 	hasKube      bool
+	hasAzure     bool
+	selfSigned   bool
 	kubePublic   bool
 	trustChecked bool
 	anyTrusted   bool
@@ -264,6 +273,60 @@ func Correlate(in Input) ([]Certificate, []Finding) {
 		}
 	}
 
+	azureRecords := append([]azurekv.Certificate(nil), in.Azure...)
+	sort.SliceStable(azureRecords, func(i, j int) bool {
+		if azureRecords[i].Facts.Vault != azureRecords[j].Facts.Vault {
+			return azureRecords[i].Facts.Vault < azureRecords[j].Facts.Vault
+		}
+		if azureRecords[i].Facts.Name != azureRecords[j].Facts.Name {
+			return azureRecords[i].Facts.Name < azureRecords[j].Facts.Name
+		}
+		return azureRecords[i].Facts.Version < azureRecords[j].Facts.Version
+	})
+	for _, record := range azureRecords {
+		key := "azurekv:" + record.Facts.Vault + "/" + record.Facts.Name + "/" + record.Facts.Version
+		if record.Fingerprint != "" {
+			key = "fp:" + record.Fingerprint
+		}
+		entry := ensure(accumulated, &order, key, record.Fingerprint)
+		if record.Fingerprint != "" {
+			entry.setMethod(CorrelationSHA256)
+		} else {
+			entry.setMethod(CorrelationUnresolved)
+		}
+		entry.hasAzure = true
+		if strings.EqualFold(strings.TrimSpace(record.Facts.Issuer), "self") {
+			entry.selfSigned = true
+		}
+		for _, name := range record.Names {
+			if normalized := normalizeName(name); normalized != "" {
+				entry.names[normalized] = true
+			}
+		}
+		if entry.certificate.Issuer == "" {
+			entry.certificate.Issuer = record.Facts.Issuer
+		}
+		if entry.certificate.Serial == "" {
+			entry.certificate.Serial = normalizeSerial(record.Serial)
+		}
+		if !record.NotBefore.IsZero() && (entry.certificate.NotBefore.IsZero() || entry.certificate.NotBefore.After(record.NotBefore)) {
+			entry.certificate.NotBefore = record.NotBefore
+		}
+		if !record.NotAfter.IsZero() && (entry.certificate.NotAfter.IsZero() || entry.certificate.NotAfter.After(record.NotAfter)) {
+			entry.certificate.NotAfter = record.NotAfter
+		}
+		for _, declared := range record.Owners {
+			entry.owners[ownerKey(declared)] = declared
+		}
+		facts := record.Facts
+		entry.observations[SourceAzureKeyVault+"|"+facts.Vault+"/"+facts.Name+"@"+facts.Version] = Observation{
+			Source:   SourceAzureKeyVault,
+			Location: facts.Vault + "/" + facts.Name + "@" + facts.Version,
+			Detail:   "read-only certificate, policy, and public CER",
+			KeyVault: &facts,
+		}
+	}
+
 	kubeRecords := append([]kube.Certificate(nil), in.Kube...)
 	sort.SliceStable(kubeRecords, func(i, j int) bool { return lessKube(kubeRecords[i], kubeRecords[j]) })
 	for _, record := range kubeRecords {
@@ -369,7 +432,11 @@ func finishCorrelation(accumulated map[string]*accumulator, order []string, in I
 			public := false
 			certificate.Public = &public
 		}
-		if entry.hasKube && !entry.hasCT && !entry.hasLive && certificate.Public == nil {
+		if entry.selfSigned {
+			private := false
+			certificate.Public = &private
+			certificate.Verdict100D = VerdictNotApplicable
+		} else if entry.hasKube && !entry.hasCT && !entry.hasLive && certificate.Public == nil {
 			// A certificate that only Kubernetes holds, and that does not verify
 			// against the system roots, cannot be classified as public or
 			// private, so the 100-day rule does not apply to it.
@@ -644,6 +711,22 @@ func renewalInput(certificate Certificate, in Input) renewal.Input {
 			input.HasKube = true
 			if observation.Kubernetes != nil {
 				input.Secrets = append(input.Secrets, renewal.Secret{CertificateName: observation.Kubernetes.CertificateName})
+			}
+		case SourceAzureKeyVault:
+			if observation.KeyVault != nil {
+				keyVault := renewal.KeyVault{
+					Vault:          observation.KeyVault.Vault,
+					Issuer:         observation.KeyVault.Issuer,
+					ValidityMonths: observation.KeyVault.PolicyValidityMonths,
+				}
+				for _, action := range observation.KeyVault.LifetimeActions {
+					keyVault.LifetimeActions = append(keyVault.LifetimeActions, renewal.LifetimeAction{
+						Type:               action.Type,
+						DaysBeforeExpiry:   action.DaysBeforeExpiry,
+						LifetimePercentage: action.LifetimePercentage,
+					})
+				}
+				input.KeyVaults = append(input.KeyVaults, keyVault)
 			}
 		case SourceCertManager:
 			input.HasKube = true

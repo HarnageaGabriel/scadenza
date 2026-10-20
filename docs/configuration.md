@@ -35,6 +35,11 @@ kube:
     - payments
   ownershipFile: ownership.yaml
 
+azure:
+  # Read-only certificate inventory; repeatable as --azure-keyvault.
+  keyVaults:
+    - https://prod.vault.azure.net
+
 # Declared renewal modes, per domain. The only accepted value is `manual`: it is
 # positive evidence for renewal classification. An automatic mechanism (a
 # cert-manager Certificate or annotated TLS Secret) still wins. Keys are
@@ -48,7 +53,9 @@ policy:
   # Finding kinds that cause exit 3. One of ct_only, live_only, exceeds-100d,
   # not-compliant-at-issuance, renew-before-exceeds-lifetime, renewal-degraded,
   # renew-before-loop-at-next-limit, duration-exceeds-next-limit,
-  # manual-renewal-after-limit, renewal-config-invalid, or none alone. Default:
+  # manual-renewal-after-limit, renewal-config-invalid,
+  # keyvault-validity-exceeds-next-limit,
+  # keyvault-renew-trigger-exceeds-lifetime, or none alone. Default:
   # [live_only, not-compliant-at-issuance, renew-before-exceeds-lifetime,
   # renewal-degraded].
   failOn:
@@ -76,6 +83,7 @@ is used. The mapping is one flag per key: `--domain`/`domains`,
 `--port`/`port`, `--kube`/`kube.enabled`, `--kube-secrets`/`kube.secrets`,
 `--kube-context`/`kube.context`,
 `--namespace`/`kube.namespaces`, `--ownership-file`/`kube.ownershipFile`,
+`--azure-keyvault`/`azure.keyVaults`,
 `--fail-on`/`policy.failOn`, `--strict`/`policy.strict`,
 `--min-coverage`/`policy.minCoverage`. There is no flag for `renewal`; it is
 only read from the file.
