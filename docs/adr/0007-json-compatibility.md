@@ -50,6 +50,65 @@ so the in-repo validator stands in until the module can be fetched. VERIFY:
 adopt `jsonschema/v6` and delete the in-repo validator once the module proxy is
 reachable.
 
+## Enforcement
+
+`tools/schemadiff` compares two JSON Schema files and reports the changes
+that break the consumers of the older contract, one per line, with a JSON
+pointer path and a reason. It exits 1 when it finds one and 0 otherwise.
+
+A line that starts with `note` is informational and does not fail the run.
+Decision 1 allows a name to be added to a `required` list and allows a
+required name to be dropped, and decision 2 allows a new enum value, so the
+tool reports those three changes as notes:
+
+- a new enum value was added,
+- a name was added to the `required` list, whether the property itself is new
+  or was optional before,
+- a required property became optional; decision 1 allows it, but consumers
+  relying on presence may be affected, so the note says so.
+
+The breaks are the ones of decision 1:
+
+- a removed property,
+- a type that is no longer accepted, or a `type` constraint that was added,
+- a removed enum value, or an `enum` constraint that was added,
+- a `pattern` that was added, or one that changed to a pattern that is not
+  provably looser,
+- a `minimum`, `maximum`, `minLength` or `maxLength` that was added or that
+  became stricter,
+- an `additionalProperties` that turned false or that became constrained by a
+  schema,
+- a `const` that was added or changed,
+- an array `items` constraint that was added or changed,
+- an `allOf`, `anyOf` or `oneOf` list that was added or whose branch count
+  changed,
+- a `$ref` that changed to another external target, or one that lost its
+  target,
+- a removed definition that is still referenced.
+
+A new optional property and a new definition are not breaks and are not
+reported. Neither is a constraint that got looser: a wider type list, a
+removed `enum` constraint, a looser or removed `pattern`, a relaxed or
+removed bound, an `additionalProperties` that allows extra fields again, a
+removed `const`, and a removed `items`, `allOf`, `anyOf` or `oneOf` list. A
+property that was removed is reported as a break alone, not also as a note
+about its required entry.
+
+The baseline is the latest stable `vMAJOR.MINOR.PATCH` tag. A prerelease such
+as `v0.0.0-rc.1` is a rehearsal, not a release, and is ignored. The
+`Schema compatibility` job in `.github/workflows/ci.yml` extracts
+`docs/schema/*.json` from that tag and compares them with the working tree
+copies, which is the diff between releases that ADR 0006 decision 9 asks
+for. While no stable tag exists, the job says that there is no released
+baseline yet and passes.
+
+Run it locally with:
+
+```sh
+git show v0.1.0:docs/schema/scan-v1.schema.json > /tmp/old-scan.json
+go run ./tools/schemadiff /tmp/old-scan.json docs/schema/scan-v1.schema.json
+```
+
 ## Consequences
 
 Consumers can add fields and enum values without a `schema_version` bump before
