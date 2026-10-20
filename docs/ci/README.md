@@ -40,7 +40,8 @@ no report, and exits 130.
 ```sh
 scadenza scan --domain example.com --format json \
   --fail-on live_only,not-compliant-at-issuance \
-  --strict --min-coverage 90
+  --strict --min-coverage 90 \
+  --max-duration 9m
 ```
 
 - `--strict` exits 5 when a source is partial or failed, a probe failed, or an
@@ -51,6 +52,11 @@ scadenza scan --domain example.com --format json \
 - `--fail-on` chooses the finding kinds that cause exit 3. The default is
   `live_only,not-compliant-at-issuance,renew-before-exceeds-lifetime,renewal-degraded`.
   `--fail-on none` turns exit 3 off; keep `--strict` and `--min-coverage` on.
+- `--max-duration 9m` gives the run a time limit. Set it a little below the
+  timeout of the CI job, so the scan stops on its own and still writes its
+  report, instead of the job killing the process and losing the report. A run
+  that reaches the limit is an incomplete run: it writes the document with
+  what it collected, reports `SCD-0035`, and exits 5 under `--strict`.
 
 `--min-coverage` measures probe coverage, not compliance. Every report
 carries a `coverage` object, so a partial scan never looks clean.

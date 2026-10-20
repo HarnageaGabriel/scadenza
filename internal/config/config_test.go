@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const validDocument = `version: 1
@@ -14,6 +15,7 @@ hosts: [www.example.com]
 hostsFile: hosts.txt
 fromCT: false
 port: 8443
+maxDuration: 10m
 kube:
   enabled: true
   secrets: true
@@ -42,6 +44,39 @@ func TestParseValidDocument(t *testing.T) {
 	}
 	if !config.Policy.Strict || config.Policy.MinCoverage == nil || *config.Policy.MinCoverage != 80 {
 		t.Fatalf("policy = %+v", config.Policy)
+	}
+	if config.MaxDuration == nil || *config.MaxDuration != 10*time.Minute {
+		t.Fatalf("maxDuration = %v", config.MaxDuration)
+	}
+}
+
+// TestParseMaxDuration proves that the maximum duration is read as a
+// duration string, that an absent key leaves the limit unset, and that a
+// value that is not a usable duration is rejected.
+func TestParseMaxDuration(t *testing.T) {
+	config, err := Parse([]byte("version: 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MaxDuration != nil {
+		t.Fatalf("maxDuration = %v, want no limit", *config.MaxDuration)
+	}
+	config, err = Parse([]byte("version: 1\nmaxDuration: 1h30m\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MaxDuration == nil || *config.MaxDuration != 90*time.Minute {
+		t.Fatalf("maxDuration = %v, want 90m", config.MaxDuration)
+	}
+	for _, document := range []string{
+		"version: 1\nmaxDuration: later\n",
+		"version: 1\nmaxDuration: 600\n",
+		"version: 1\nmaxDuration: -5s\n",
+		"version: 1\nmaxDuration: ''\n",
+	} {
+		if _, err := Parse([]byte(document)); err == nil || !errors.Is(err, ErrInvalid) {
+			t.Fatalf("Parse(%q) err = %v, want ErrInvalid", document, err)
+		}
 	}
 }
 

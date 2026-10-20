@@ -72,6 +72,7 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 	var includeSubdomains, expired bool
 	var format string
 	var maximum int
+	var maxDuration time.Duration
 	var nowFlag string
 	command := &cobra.Command{
 		Use: "ct <domain>", Short: "List certificates issued for a domain", Args: usageArgs(cobra.ExactArgs(1)),
@@ -83,6 +84,10 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 			}
 			if maximum < 1 {
 				emitDiagnostic(stderr, "SCD-0001", "--max-results must be positive")
+				return &commandError{code: ExitUsageError}
+			}
+			if maxDuration < 0 {
+				emitDiagnostic(stderr, "SCD-0001", "--max-duration must not be negative")
 				return &commandError{code: ExitUsageError}
 			}
 			if format != "table" && format != "json" && format != "csv" {
@@ -107,16 +112,30 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 				}
 				chosen = append(chosen, source)
 			}
+			// The maximum duration starts when the command body starts
+			// working, so the deadline is derived here and not at process
+			// start. An interrupt still wins: the interrupt cancels the run
+			// context and its cause propagates.
+			ctx, cancelRun := deadlineContext(command.Context(), maxDuration)
+			defer cancelRun()
 			var certificates []ct.Certificate
 			var used []string
 			diagnostics := []diag.Diagnostic{}
+			deadlineHit := false
 			for index, source := range chosen {
-				certificates, err = source.Search(command.Context(), ct.Query{Domain: domain, IncludeSubdomains: includeSubdomains, Limit: maximum + 1, Now: dependencies.clock.Now(), IncludeExpired: expired})
-				if interrupted(command.Context()) {
+				certificates, err = source.Search(ctx, ct.Query{Domain: domain, IncludeSubdomains: includeSubdomains, Limit: maximum + 1, Now: dependencies.clock.Now(), IncludeExpired: expired})
+				if interrupted(ctx) {
 					return &commandError{code: ExitInterrupted}
 				}
 				if err == nil {
 					used = []string{source.Name()}
+					break
+				}
+				if deadlineExceeded(ctx) {
+					// The run reached its maximum duration, so the source did
+					// not answer. The deadline diagnostic says so, and no
+					// source is reported as unavailable because of it.
+					deadlineHit = true
 					break
 				}
 				code := sourceErrorCode(err)
@@ -130,6 +149,11 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 				}
 			}
 			if err != nil {
+				if deadlineHit {
+					// No source produced data, so the lookup reports no
+					// result and the deadline is reported once.
+					emitDiagnostic(stderr, "SCD-0035", "the Certificate Transparency lookup stopped after "+maxDuration.String())
+				}
 				return &commandError{code: ExitSourceUnavailable}
 			}
 			now := evaluationClock.Now()
@@ -145,7 +169,7 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 				emitDiagnostic(stderr, "SCD-0005", domain)
 			}
 			document := render.CTDocument{SchemaVersion: "scadenza.ct/v1", Domain: domain, GeneratedAt: now.UTC(), SourcesUsed: used, Certificates: certificates, Diagnostics: diagnostics}
-			if err := writeDocument(command.Context(), stdout, func(writer io.Writer) error {
+			if err := writeDocument(ctx, stdout, func(writer io.Writer) error {
 				return render.CT(writer, format, document)
 			}); err != nil {
 				return err
@@ -158,6 +182,7 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 	command.Flags().BoolVar(&expired, "expired", false, "include expired certificates")
 	command.Flags().StringVar(&format, "format", "table", "output format: table, json, csv")
 	command.Flags().IntVar(&maximum, "max-results", 1000, "maximum certificates to print")
+	command.Flags().DurationVar(&maxDuration, "max-duration", 0, "maximum duration of the whole run (0 means no limit)")
 	command.Flags().StringVar(&nowFlag, "now", "", "evaluation instant as an RFC 3339 timestamp; defaults to the current time")
 	return command
 }
