@@ -149,3 +149,69 @@ func TestCSVSafeLooksPastLeadingWhitespace(t *testing.T) {
 		})
 	}
 }
+
+// TestCSVSafeQuotesUnicodeFormulaLookalikes pins the formula guard promise
+// for the Unicode lookalikes of the formula characters: a cell that starts
+// with a fullwidth or small form of equals, plus, hyphen minus or commercial
+// at is prefixed with a single quote, also after leading whitespace such as a
+// space or a non breaking space.
+func TestCSVSafeQuotesUnicodeFormulaLookalikes(t *testing.T) {
+	for _, lookalike := range []struct {
+		name  string
+		value string
+	}{
+		{"fullwidth equals", "\uFF1D"},
+		{"fullwidth plus", "\uFF0B"},
+		{"fullwidth hyphen minus", "\uFF0D"},
+		{"fullwidth commercial at", "\uFF20"},
+		{"small equals", "\uFE66"},
+		{"small plus", "\uFE62"},
+		{"small hyphen minus", "\uFE63"},
+		{"small at", "\uFE6B"},
+	} {
+		for _, prefix := range []struct {
+			name  string
+			value string
+		}{
+			{"at the start", ""},
+			{"after a space", " "},
+			{"after a non breaking space", "\u00A0"},
+		} {
+			t.Run(lookalike.name+" "+prefix.name, func(t *testing.T) {
+				// Promise: the lookalike is quoted, so the cell is not
+				// evaluated as a formula.
+				value := prefix.value + lookalike.value + "1+1"
+				if got := csvSafe(value); got != "'"+value {
+					t.Errorf("csvSafe(%q) = %q, want %q", value, got, "'"+value)
+				}
+			})
+		}
+	}
+}
+
+// TestCSVSafeLeavesLookalikesInsideAValueAlone pins the other side of the
+// promise: a lookalike that appears later in the value is not a formula, and
+// a value that starts with an ordinary letter is left alone.
+func TestCSVSafeLeavesLookalikesInsideAValueAlone(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{"fullwidth equals inside", "a\uFF1D1+1"},
+		{"fullwidth plus inside", "a\uFF0B1+1"},
+		{"fullwidth hyphen minus inside", "a\uFF0D1+1"},
+		{"fullwidth commercial at inside", "a\uFF201+1"},
+		{"small equals inside", "a\uFE661+1"},
+		{"small plus inside", "a\uFE621+1"},
+		{"small hyphen minus inside", "a\uFE631+1"},
+		{"small at inside", "a\uFE6B1+1"},
+		{"letter then text", "a1+1"},
+		{"plain value", "plain"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := csvSafe(test.value); got != test.value {
+				t.Errorf("csvSafe(%q) = %q, want %q", test.value, got, test.value)
+			}
+		})
+	}
+}

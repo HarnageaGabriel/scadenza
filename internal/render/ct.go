@@ -81,18 +81,30 @@ func csvCell(value string) string {
 	return capRunes(csvSafe(sanitizeCell(value)), MaxCellRunes)
 }
 
+// csvFormulaLookalikes are the Unicode code points that look like the ASCII
+// formula characters: the fullwidth forms of equals, plus, hyphen minus and
+// commercial at, and the small forms of the same four.
+//
+// VERIFY: spreadsheets are not confirmed to treat these lookalikes as
+// formulas, so the guard quotes them anyway. The caution is deliberate:
+// quoting a cell that was never a formula costs a single apostrophe, while
+// missing a lookalike lets a spreadsheet evaluate a formula.
+const csvFormulaLookalikes = "\uFF1D\uFF0B\uFF0D\uFF20\uFE66\uFE62\uFE63\uFE6B"
+
 // csvSafe neutralizes spreadsheet formula injection by prefixing a single
 // quote. The value is sanitized before it gets here, so it can no longer
 // contain a line break; the guard still covers a value that starts with a tab
 // or a carriage return, and it looks past leading whitespace, so a cell that
 // starts with spaces or a non breaking space before a formula character is
-// guarded as well.
+// guarded as well. The Unicode lookalikes of the formula characters are
+// guarded the same way, so a cell that starts with a fullwidth or small form
+// of equals, plus, hyphen minus or commercial at is quoted too.
 func csvSafe(value string) string {
 	if value == "" {
 		return value
 	}
 	first, _ := utf8.DecodeRuneInString(value)
-	if strings.ContainsRune("=+-@\t\r", first) {
+	if strings.ContainsRune("=+-@\t\r", first) || strings.ContainsRune(csvFormulaLookalikes, first) {
 		return "'" + value
 	}
 	trimmed := strings.TrimLeftFunc(value, unicode.IsSpace)
@@ -100,7 +112,7 @@ func csvSafe(value string) string {
 		return value
 	}
 	leading, _ := utf8.DecodeRuneInString(trimmed)
-	if strings.ContainsRune("=+-@", leading) {
+	if strings.ContainsRune("=+-@", leading) || strings.ContainsRune(csvFormulaLookalikes, leading) {
 		return "'" + value
 	}
 	return value
