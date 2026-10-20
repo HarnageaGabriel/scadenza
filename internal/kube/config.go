@@ -3,6 +3,7 @@ package kube
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -28,6 +29,11 @@ type LoadOptions struct {
 
 // defaultQPS is the documented --kube-qps default.
 const defaultQPS = 5
+
+// requestTimeout bounds a single Kubernetes API request. The scan command
+// context carries no deadline, so without it a hung API server would block a
+// scan forever. client-go applies the value to the HTTP client it builds.
+const requestTimeout = 30 * time.Second
 
 // Load builds a read-only Kubernetes client from --kubeconfig, --kube-context,
 // the KUBECONFIG environment, or the in-cluster configuration, and returns a
@@ -92,6 +98,7 @@ func restConfig(load LoadOptions) (*rest.Config, error) {
 	}
 	config.QPS = float32(qps)
 	config.Burst = burst
+	config.Timeout = requestTimeout
 	if load.UserAgent != "" {
 		config.UserAgent = load.UserAgent
 	}
