@@ -725,6 +725,24 @@ func TestScanKubeSecretsFlagAndDiagnostic(t *testing.T) {
 	}
 }
 
+// TestScanKubeSecretsDiagnosticOnClientFailure proves SCD-0029 is emitted when
+// Secret data reads were requested even though the Kubernetes client could not
+// be built, so the opt-in is always recorded.
+func TestScanKubeSecretsDiagnosticOnClientFailure(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{"scan", "--kube", "--kube-secrets", "--namespace", "payments", "--format", "json"},
+		&stdout, &stderr, scanKubeDependencies("x", fakeProber{}, nil, errors.New("cannot reach the API server")))
+	if code != ExitSourceUnavailable {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "SCD-0029") || !strings.Contains(stderr.String(), "namespaces=payments") {
+		t.Fatalf("missing SCD-0029 when the client fails: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "SCD-0014") {
+		t.Fatalf("missing SCD-0014 when the client fails: %s", stderr.String())
+	}
+}
+
 func TestKubeSecretNamespaceDetail(t *testing.T) {
 	if got := kubeSecretNamespaceDetail([]string{"", "  "}); got != "all" {
 		t.Fatalf("empty namespace scope = %q, want all", got)
