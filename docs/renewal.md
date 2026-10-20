@@ -100,9 +100,13 @@ These facts explain the observed cadence. They never decide `renewal.mode` or
 The window is a fixed `365 * 24h` ending at the evaluation instant, so a leap
 year cannot stretch it to 366 days, and a record whose `notBefore` is after the
 evaluation instant is ignored. Records are deduplicated by stable issuance
-identity before the cadence is computed: the precertificate and the final
-certificate of one issuance share an issuer and serial, so they count once, and
-the duplicate records that overlapping domain queries return count once too.
+identity before the cadence is computed: a record that carries a serial is
+identified by its issuer and serial, and a record without one (Cert Spotter
+carries no serial) by its name set, its `notBefore`, and its issuer, so the
+precertificate and the final certificate of one issuance count once and the
+duplicate records that overlapping domain queries return count once too; two
+issuances less than an hour apart are one renewal, because a certificate is not
+renewed twice within an hour.
 
 ## Risks: configurations that break under shorter lifetimes
 
