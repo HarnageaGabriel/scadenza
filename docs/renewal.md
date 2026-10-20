@@ -1,23 +1,23 @@
 # Renewal classification
 
 `scadenza scan` answers two questions about every certificate it finds: **how is
-it renewed** (`renewal_mode`) and **is that renewal working** (`renewal_health`).
-Both always carry the evidence they are based on, and configurations that will
-break under shorter lifetimes are reported as findings. This is ADR 0006,
-decisions 5 and 6.
+it renewed** (`renewal.mode`) and **is that renewal working**
+(`renewal.health`). Both always carry the evidence they are based on, and
+configurations that will break under shorter lifetimes are reported as
+findings. This is ADR 0006, decisions 5 and 6.
 
 Missing evidence is `unknown`, never a guess. scadenza never infers renewal from
 a certificate name or issuer unless a documented, explicit fact says so.
 
 ## The two fields
 
-`renewal_mode` is one of:
+`renewal.mode` is one of:
 
 - `automatic` - a managing controller renews the certificate.
 - `manual` - an operator declared that they renew it by hand.
 - `unknown` - no renewal mechanism could be established.
 
-`renewal_health` is one of:
+`renewal.health` is one of:
 
 - `healthy` - a controller reports `Ready=True` and both `status.renewalTime`
   and `status.notAfter` are in the future.
@@ -94,8 +94,8 @@ Transparency records it already fetched:
 - `ct-median-interval-days` - the median interval in days between consecutive
   issuances (rounded to the nearest whole day), when there are at least two.
 
-These facts explain the observed cadence. They never decide `renewal_mode` or
-`renewal_health`.
+These facts explain the observed cadence. They never decide `renewal.mode` or
+`renewal.health`.
 
 The window is a fixed `365 * 24h` ending at the evaluation instant, so a leap
 year cannot stretch it to 366 days, and a record whose `notBefore` is after the
@@ -106,28 +106,32 @@ the duplicate records that overlapping domain queries return count once too.
 
 ## Risks: configurations that break under shorter lifetimes
 
-Each risk is also a finding, with its own diagnostic:
+Each risk kind is a finding kind: it is reported in the `findings` array of the
+scan document, with the risk detail as the finding's `detail`. The
+[diagnostic reference](diagnostics/README.md) describes what each of these
+kinds means, but the command prints no `SCD-` line for a risk: a risk is a
+finding, not a diagnostic.
 
-- `renew-before-exceeds-lifetime` (`SCD-0023`) - a fixed `spec.renewBefore` is
-  at or beyond the actual issued lifetime, so cert-manager renews in a loop now.
-- `renew-before-loop-at-next-limit` (`SCD-0024`) - a fixed `spec.renewBefore`
-  reaches the next CA/B maximum validity, or, for an ACME issuer on
+- `renew-before-exceeds-lifetime` - a fixed `spec.renewBefore` is at or beyond
+  the actual issued lifetime, so cert-manager renews in a loop now.
+- `renew-before-loop-at-next-limit` - a fixed `spec.renewBefore` reaches the
+  next CA/B maximum validity, or, for an ACME issuer on
   `acme-v02.api.letsencrypt.org`, the next announced Let's Encrypt lifetime. The
   `effective` date is recorded. `spec.renewBeforePercentage` is recommended
   because it follows the actual issued duration.
-- `duration-exceeds-next-limit` (`SCD-0025`) - a requested `spec.duration`
-  exceeds the CA/B maximum validity that governs the next issuance for an ACME
-  issuer on a known public CA. When `spec.duration` is absent, cert-manager's
-  documented 90-day default is used and recorded as the evidence fact
-  `duration-source=default`. The known ACME directory hosts are Let's Encrypt
+- `duration-exceeds-next-limit` - a requested `spec.duration` exceeds the CA/B
+  maximum validity that governs the next issuance for an ACME issuer on a known
+  public CA. When `spec.duration` is absent, cert-manager's documented 90-day
+  default is used and recorded as the evidence fact `duration-source=default`.
+  The known ACME directory hosts are Let's Encrypt
   (`acme-v02.api.letsencrypt.org`), ZeroSSL (`acme.zerossl.com`), Google Trust
   Services (`dv.acme-v02.api.pki.goog`, `pki.goog`), and Buypass
   (`api.buypass.com`). An unknown ACME server produces no finding, only evidence.
-- `renewal-degraded` (`SCD-0026`) - `renewal_health` is `degraded`.
-- `manual-renewal-after-limit` (`SCD-0027`) - a manual certificate's `notAfter`
-  falls after the next CA/B step, so the manual workload grows.
-- `renewal-config-invalid` (`SCD-0028`) - `spec.duration`, `spec.renewBefore`,
-  or `spec.renewBeforePercentage` holds a value cert-manager's own validation
+- `renewal-degraded` - `renewal.health` is `degraded`.
+- `manual-renewal-after-limit` - a manual certificate's `notAfter` falls after
+  the next CA/B step, so the manual workload grows.
+- `renewal-config-invalid` - `spec.duration`, `spec.renewBefore`, or
+  `spec.renewBeforePercentage` holds a value cert-manager's own validation
   rejects: `spec.duration` must be at least 1h, the effective `spec.renewBefore`
   must be at least 5m, `spec.duration` must be greater than `spec.renewBefore`
   (equal is invalid), and `spec.renewBeforePercentage` must be an integer

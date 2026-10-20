@@ -310,9 +310,9 @@ the `1.0` empty ratio never turns a missing check into a pass.
 
 The order is **2 usage > 4 all sources unavailable > 3 blocking finding > 5
 incomplete scan > 0**. `4` only when at least one external source (Certificate
-Transparency or Kubernetes) was requested and every requested one was
-unavailable; a failed TLS probe is a `probe_errors` entry, never exit 4, and
-partial failures are warnings. `3` when a finding of a kind selected by
+Transparency, Kubernetes, or Azure Key Vault) was requested and every requested
+one was unavailable; a failed TLS probe is a `probe_errors` entry, never exit 4,
+and partial failures are warnings. `3` when a finding of a kind selected by
 `--fail-on` is present. `5` when `--strict` or `--min-coverage` is not met and
 nothing else applies. When `4` or `3` wins, `SCD-0020` is still emitted as a
 warning so an incomplete scan is not hidden. `2` on usage errors. See
@@ -321,7 +321,8 @@ warning so an incomplete scan is not hidden. `2` on usage errors. See
 ## Output
 
 JSON follows [`scadenza.scan/v1`](../schema/scan-v1.schema.json) and contains
-`certificates`, `findings`, `unresolved`, `probe_errors`, `diagnostics`, and
+`schema_version`, `generated_at`, `domains`, `sources_used`, `certificates`,
+`findings`, `unresolved`, `probe_errors`, `diagnostics`, `owners`, and
 `coverage`. The table prints the certificates (with `MODE` and `HEALTH`), the
 findings summary, a `RISKS` summary when any certificate has a risk, and the
 one-line coverage summary. CSV emits one row per (certificate, observation).

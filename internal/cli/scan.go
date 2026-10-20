@@ -2,11 +2,11 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,10 +22,24 @@ import (
 	"github.com/HarnageaGabriel/scadenza/internal/owner"
 	"github.com/HarnageaGabriel/scadenza/internal/render"
 	"github.com/HarnageaGabriel/scadenza/internal/renewal"
+	"github.com/HarnageaGabriel/scadenza/internal/safefile"
 	"github.com/HarnageaGabriel/scadenza/internal/tlsprobe"
 	"github.com/HarnageaGabriel/scadenza/internal/version"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
+)
+
+const (
+	// maxHostsFileBytes caps the hosts file. The file is read into memory, so
+	// the cap keeps one hostile path from exhausting the process.
+	maxHostsFileBytes = 4 << 20
+	// maxOwnershipFileBytes caps the ownership mapping file.
+	maxOwnershipFileBytes = 1 << 20
+	// MaxHostsEntries caps the number of hosts a hosts file may declare. It
+	// is not the --max-hosts option: that one caps the hosts derived from
+	// Certificate Transparency and applies later, so it cannot replace this
+	// bound on the file itself.
+	MaxHostsEntries = 10000
 )
 
 // hostProber probes one host for its presented certificate chain.
@@ -796,15 +810,15 @@ func loadOwnership(path string, stderr io.Writer) (owner.Config, error) {
 	if strings.TrimSpace(path) == "" {
 		return owner.ParseConfig(nil)
 	}
-	//nolint:gosec // G304: the path comes from --ownership-file, supplied by the user.
-	data, err := os.ReadFile(path)
+	data, err := safefile.Read(path, maxOwnershipFileBytes)
 	if err != nil {
-		emitDiagnostic(stderr, kube.CodeOwnershipFileInvalid, path)
+		// The error already names the path.
+		emitDiagnostic(stderr, kube.CodeOwnershipFileInvalid, err.Error())
 		return owner.Config{}, fmt.Errorf("read ownership file: %w", err)
 	}
 	config, err := owner.ParseConfig(data)
 	if err != nil {
-		emitDiagnostic(stderr, kube.CodeOwnershipFileInvalid, path)
+		emitDiagnostic(stderr, kube.CodeOwnershipFileInvalid, path+": "+err.Error())
 		return owner.Config{}, err
 	}
 	return config, nil
@@ -850,21 +864,22 @@ func targetKey(target probeTarget) string {
 	return target.host + ":" + strconv.Itoa(target.port)
 }
 
+// readHostsFile reads the hosts file. The file must be a regular file and is
+// read under the maxHostsFileBytes cap, so a device, a named pipe, or an
+// oversized file is an error instead of a hang or an allocation.
 func readHostsFile(path string) ([]string, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
-	//nolint:gosec // G304: path comes from the --hosts-file flag, which the user explicitly supplies.
-	file, err := os.Open(path)
+	data, err := safefile.Read(path, maxHostsFileBytes)
 	if err != nil {
-		return nil, fmt.Errorf("open hosts file: %w", err)
+		return nil, fmt.Errorf("read hosts file: %w", err)
 	}
-	defer func() { _ = file.Close() }()
-	return parseHostsFile(file)
+	return parseHostsFile(bytes.NewReader(data))
 }
 
 // parseHostsFile reads one host per line, ignoring blank lines and treating '#'
-// as the start of a comment.
+// as the start of a comment. At most MaxHostsEntries hosts are accepted.
 func parseHostsFile(reader io.Reader) ([]string, error) {
 	result := []string{}
 	scanner := bufio.NewScanner(reader)
@@ -878,6 +893,9 @@ func parseHostsFile(reader io.Reader) ([]string, error) {
 			continue
 		}
 		result = append(result, line)
+		if len(result) > MaxHostsEntries {
+			return nil, fmt.Errorf("the hosts file declares more than %d entries", MaxHostsEntries)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read hosts file: %w", err)
