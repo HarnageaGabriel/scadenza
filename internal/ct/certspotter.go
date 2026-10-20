@@ -29,33 +29,81 @@ const MaxPages = 1000
 
 // Search returns normalized Cert Spotter issuances.
 func (s *CertSpotter) Search(ctx context.Context, query Query) ([]Certificate, error) {
-	var result []Certificate
+	result, err := s.SearchResult(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return result.Certificates, nil
+}
+
+// SearchResult returns normalized Cert Spotter issuances and reports whether
+// the query stopped before Cert Spotter was exhausted.
+//
+// Pagination stops on the first of: an empty page, a page that adds no new
+// record, the caller limit, the entry cap, or the page limit. The entry cap
+// bounds how many entries one query may receive; a caller limit is never
+// shortened by it.
+func (s *CertSpotter) SearchResult(ctx context.Context, query Query) (Result, error) {
+	limit := query.Limit
+	capped := limit <= 0
+	if capped {
+		limit = MaxEntries
+	}
+	entryCap := limit
+	if entryCap < MaxEntries {
+		entryCap = MaxEntries
+	}
+	var collected []Certificate
+	seen := map[string]bool{}
+	received := 0
 	after := ""
 	for pages := 0; ; pages++ {
 		if pages >= MaxPages {
-			return nil, malformed(s.Name(), errors.New("page limit exceeded"))
+			return Result{Certificates: collected, Truncated: true}, malformed(s.Name(), errors.New("page limit exceeded"))
 		}
 		body, err := s.fetch(ctx, query, after)
 		if err != nil {
-			return nil, err
+			return Result{Certificates: collected, Truncated: true}, err
 		}
 		page, err := decodeCertSpotter(body)
 		if err != nil {
-			return nil, malformed(s.Name(), err)
+			return Result{Certificates: collected, Truncated: true}, malformed(s.Name(), err)
 		}
 		if len(page) == 0 {
-			return result, nil
+			return Result{Certificates: collected}, nil
 		}
 		next := page[len(page)-1].DedupKey
 		if next == "" || next == after {
-			return nil, malformed(s.Name(), errors.New("pagination cursor missing or not advancing"))
+			return Result{Certificates: collected, Truncated: true}, malformed(s.Name(), errors.New("pagination cursor missing or not advancing"))
 		}
 		after = next
-		result = append(result, page...)
-		if query.Limit > 0 {
-			if kept, _ := Finalize(result, query.Now, query.IncludeExpired, 0); len(kept) >= query.Limit {
-				return result, nil
+		fresh := 0
+		for _, certificate := range page {
+			if key := certificate.DedupKey; key != "" {
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
 			}
+			collected = append(collected, certificate)
+			fresh++
+		}
+		received += len(page)
+		truncated := received >= entryCap
+		if fresh == 0 {
+			return Result{Certificates: collected, Truncated: truncated}, nil
+		}
+		if truncated {
+			if len(collected) > entryCap {
+				collected = collected[:entryCap]
+			}
+			return Result{Certificates: collected, Truncated: true}, nil
+		}
+		if capped {
+			continue
+		}
+		if kept, _ := Finalize(collected, query.Now, query.IncludeExpired, 0); len(kept) >= limit {
+			return Result{Certificates: collected, Truncated: true}, nil
 		}
 	}
 }
@@ -79,7 +127,7 @@ func (s *CertSpotter) fetch(ctx context.Context, query Query, after string) ([]b
 		status, headers, body, err := s.Client.Do(ctx, request)
 		if err != nil {
 			if errors.Is(err, httpx.ErrBodyTooLarge) {
-				return nil, malformed(s.Name(), err)
+				return nil, malformed(s.Name(), fmt.Errorf("oversized certspotter response: %w", err))
 			}
 			return nil, unavailable(s.Name(), err)
 		}
