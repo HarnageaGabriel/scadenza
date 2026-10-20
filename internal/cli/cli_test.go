@@ -3,7 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
-	"strings"
+	"fmt"
 	"testing"
 
 	"github.com/HarnageaGabriel/scadenza/internal/version"
@@ -35,8 +35,10 @@ func TestVersionOutput(t *testing.T) {
 	if code := Execute([]string{"version"}, &stdout, &stderr); code != ExitOK {
 		t.Fatalf("Execute() = %d, want %d", code, ExitOK)
 	}
-	if !strings.Contains(stdout.String(), "scadenza "+version.Version) {
-		t.Fatalf("output %q does not contain version", stdout.String())
+	info := version.Current()
+	want := fmt.Sprintf("scadenza %s\ncommit: %s\ndate: %s\n", info.Version, info.Commit, info.Date)
+	if stdout.String() != want {
+		t.Fatalf("output %q, want %q", stdout.String(), want)
 	}
 }
 

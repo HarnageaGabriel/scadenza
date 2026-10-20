@@ -221,7 +221,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				return &commandError{code: ExitUsageError}
 			}
 			azureState := readAzureKeyVault(command.Context(), dependencies.loadAzure, azureVaults, azureQPS,
-				"scadenza/"+version.Version, owners, diagnostics, stderr)
+				"scadenza/"+version.Current().Version, owners, diagnostics, stderr)
 			ctRequested := ctRequestedFor(fromCT, normalizedDomains)
 			kubeRequested := kubeEnabled
 			kubeAvailable := false
@@ -237,7 +237,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 					Context:    kubeContext,
 					Kubeconfig: kubeconfig,
 					QPS:        kubeQPS,
-					UserAgent:  "scadenza/" + version.Version,
+					UserAgent:  "scadenza/" + version.Current().Version,
 				}, kube.Options{Namespaces: namespaces, Owners: owners, Secrets: kubeSecrets, Clock: evaluationClock})
 				if loadErr != nil {
 					diagnostics.add(kube.CodeUnreachable, "")
