@@ -427,6 +427,59 @@ func TestSDKAdapterCancellationAndValidation(t *testing.T) {
 	}
 }
 
+// TestProductionClientOptionsBoundRequests proves the options built by the
+// production constructor carry the per try timeout and the retry cap.
+func TestProductionClientOptionsBoundRequests(t *testing.T) {
+	api := newSDKAPI(func() (azcore.TokenCredential, error) { return staticCredential{}, nil }, "scadenza/test")
+	if api.options.Retry.TryTimeout != perTryTimeout {
+		t.Fatalf("try timeout = %v, want %v", api.options.Retry.TryTimeout, perTryTimeout)
+	}
+	if api.options.Retry.MaxRetries != maxRetries {
+		t.Fatalf("max retries = %d, want %d", api.options.Retry.MaxRetries, maxRetries)
+	}
+	if api.options.Telemetry.ApplicationID != "scadenza/test" {
+		t.Fatalf("application id = %q", api.options.Telemetry.ApplicationID)
+	}
+}
+
+// TestSDKAdapterHungVaultFailsFast proves a vault that never answers is
+// reported as unreachable instead of hanging the scan. The per try timeout
+// is injected through the same client options the production constructor uses.
+func TestSDKAdapterHungVaultFailsFast(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	api := newSDKAPIWithOptions(
+		func() (azcore.TokenCredential, error) { return staticCredential{}, nil },
+		&azcertificates.ClientOptions{
+			ClientOptions: azcore.ClientOptions{
+				Transport: server.Client(),
+				Retry:     policy.RetryOptions{MaxRetries: -1, TryTimeout: 100 * time.Millisecond},
+			},
+			DisableChallengeResourceVerification: true,
+		},
+	)
+	if api.options.Retry.TryTimeout != 100*time.Millisecond || api.options.Retry.MaxRetries != -1 {
+		t.Fatalf("injected retry options were replaced: %+v", api.options.Retry)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := api.ListCertificateProperties(context.Background(), server.URL, "")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		assertKind(t, err, ErrorUnreachable)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the call did not return within 2s")
+	}
+}
+
 func serverURL(r *http.Request) string { return "https://" + r.Host }
 func intPtr(value int) *int            { return &value }
 

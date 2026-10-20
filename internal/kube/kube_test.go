@@ -18,6 +18,8 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -978,5 +980,42 @@ func TestScanCannotRaiseKlogVerbosity(t *testing.T) {
 	}
 	if klog.V(8).Enabled() {
 		t.Fatal("klog verbosity is >= 8; full response bodies, including Secret data, would be logged")
+	}
+}
+
+// TestRestConfigBoundsRequests proves the loaded REST configuration carries a
+// request timeout, so a hung API server cannot hang a scan. The kubeconfig
+// points at an unroutable dummy server and no request is ever made.
+func TestRestConfigBoundsRequests(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	kubeconfig := "apiVersion: v1\n" +
+		"kind: Config\n" +
+		"clusters:\n" +
+		"- cluster:\n" +
+		"    server: https://127.0.0.1:1\n" +
+		"  name: dummy\n" +
+		"contexts:\n" +
+		"- context:\n" +
+		"    cluster: dummy\n" +
+		"    user: dummy\n" +
+		"  name: dummy\n" +
+		"current-context: dummy\n" +
+		"users:\n" +
+		"- name: dummy\n" +
+		"  user:\n" +
+		"    token: dummy-token\n"
+	if err := os.WriteFile(path, []byte(kubeconfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := restConfig(LoadOptions{Kubeconfig: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Timeout != requestTimeout {
+		t.Fatalf("timeout = %v, want %v", config.Timeout, requestTimeout)
+	}
+	if config.QPS != defaultQPS || config.Burst != defaultQPS*2 {
+		t.Fatalf("qps = %v, burst = %d, want %v and %d", config.QPS, config.Burst, defaultQPS, defaultQPS*2)
 	}
 }
