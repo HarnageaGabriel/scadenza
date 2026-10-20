@@ -90,3 +90,87 @@ func TestDecodeYAMLRejectsATypeError(t *testing.T) {
 		t.Fatalf("err = %v, want a type error", err)
 	}
 }
+
+// TestDecodeYAMLRejectsAnchorsAliasesAndMergeKeys proves the three YAML
+// constructs the readers do not support are rejected, and that the error
+// names the line each construct is on. An alias can expand a document
+// exponentially and a merge key can bring in keys the unknown-key check never
+// sees, so neither may reach the decoder.
+func TestDecodeYAMLRejectsAnchorsAliasesAndMergeKeys(t *testing.T) {
+	tests := []struct {
+		name     string
+		document string
+		line     string
+	}{
+		{
+			name:     "anchor",
+			document: "version: 1\ndefaults: &defaults\n  a: 1\n",
+			line:     "line 2",
+		},
+		{
+			name:     "alias",
+			document: "defaults: &defaults\n  a: 1\nuse: *defaults\n",
+			line:     "line 3",
+		},
+		{
+			name:     "merge key",
+			document: "version: 1\n<<: {a: 1}\n",
+			line:     "line 2",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var value any
+			err := DecodeYAML([]byte(test.document), &value)
+			if err == nil {
+				t.Fatal("err = nil, want the construct to be rejected")
+			}
+			if !strings.Contains(err.Error(), test.line) {
+				t.Errorf("err = %v, want the line of the construct", err)
+			}
+			if !strings.Contains(err.Error(), "anchors, aliases and merge keys are not supported") {
+				t.Errorf("err = %v, want the message that names the rejected constructs", err)
+			}
+		})
+	}
+}
+
+// TestDecodeYAMLReadsANormalDocument proves a document that uses none of the
+// rejected constructs is decoded as before.
+func TestDecodeYAMLReadsANormalDocument(t *testing.T) {
+	var value struct {
+		Version int      `yaml:"version"`
+		Hosts   []string `yaml:"hosts"`
+		Nested  struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"nested"`
+	}
+	document := "version: 1\nhosts:\n  - a.example.com\n  - b.example.com\nnested:\n  enabled: true\n"
+	if err := DecodeYAML([]byte(document), &value); err != nil {
+		t.Fatal(err)
+	}
+	if value.Version != 1 {
+		t.Fatalf("version = %d", value.Version)
+	}
+	if strings.Join(value.Hosts, ",") != "a.example.com,b.example.com" {
+		t.Fatalf("hosts = %v", value.Hosts)
+	}
+	if !value.Nested.Enabled {
+		t.Fatal("nested.enabled = false")
+	}
+}
+
+// TestDecodeYAMLLeavesTheValueUnsetWhenAConstructIsRejected proves a
+// rejected document never reaches the value.
+func TestDecodeYAMLLeavesTheValueUnsetWhenAConstructIsRejected(t *testing.T) {
+	var value struct {
+		Version int `yaml:"version"`
+	}
+	err := DecodeYAML([]byte("version: 1\ndefaults: &defaults\n  a: 1\n"), &value)
+	if err == nil {
+		t.Fatal("err = nil, want the anchor to be rejected")
+	}
+	if value.Version != 0 {
+		t.Fatalf("version = %d, want the value untouched", value.Version)
+	}
+}
