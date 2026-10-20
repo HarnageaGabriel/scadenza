@@ -58,7 +58,7 @@ codes:
     slug: tls-probe-failed
     severity: warning
     summary: TLS probe failed
-    explanation: A TLS handshake could not be completed. The detail names the host and the failure class, one of dns, connect-timeout, refused, canceled, tls-alert, no-certificate, or handshake-failed.
+    explanation: A TLS handshake could not be completed. The detail names the host and the failure class, one of dns, connect-timeout, refused, canceled, tls-alert, no-certificate, handshake-failed, or blocked-address. The blocked-address class means that every resolved address of a Certificate Transparency derived host was a special address (loopback, link-local, multicast, or unspecified), so no address was dialed.
     remediation: Check the host name, network reachability, and whether the endpoint serves TLS on the probed port.
   - code: SCD-0011
     slug: certificate-not-trusted
@@ -198,3 +198,9 @@ codes:
     summary: An Azure Key Vault certificate was skipped
     explanation: One certificate could not be read (not found after listing, no issued certificate yet, or an invalid response) and was left out, so the scan is partial. Only the HTTP status, when there is one, and the vault host are reported.
     remediation: Check the certificate in the vault; a pending or deleted certificate needs no action.
+  - code: SCD-0034
+    slug: ct-result-truncated
+    severity: warning
+    summary: Certificate Transparency result stopped at the entry cap
+    explanation: A Certificate Transparency query collected more entries than the entry cap allows, so the result stops at the cap and the source is reported as partial. The issuances after the cap were not read.
+    remediation: Scan a narrower scope, such as a single subdomain, or query the Certificate Transparency source directly for the issuances beyond the cap.

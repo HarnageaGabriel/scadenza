@@ -40,4 +40,4 @@ For Azure RBAC, use the built-in **Key Vault Reader** role at the narrowest vaul
 
 **VERIFY:** the role and data actions were checked against Microsoft's [certificate access control](https://learn.microsoft.com/azure/key-vault/certificates/certificate-access-control) and [built-in role](https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/security#key-vault-reader) pages on 2026-10-15; re-check before provisioning because built-in definitions can change.
 
-Tags feed the configured ownership label keys and a match has `owner_source: tag`. Observations also include vault host, name, version, enabled state, validity, SANs, issuer, policy validity in months, lifetime actions, tags, and content type.
+Tags feed the configured ownership label keys and a match has `owner_source: tag`. The `azure_keyvault` observation carries the certificate name, the vault host, the version, the enabled state, `not_before` and `not_after`, the issuer, the policy validity in months, the lifetime actions, the tags, and the content type. It carries no SAN list: the subject names are on the certificate itself, in the certificate's `names`.

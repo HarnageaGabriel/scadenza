@@ -18,11 +18,17 @@ An owner value is read from, in this order:
   `namespace-annotation`, never as `namespace-label`.
 - `mapping-file` - a `domains` entry whose domain suffix matches one of the
   certificate names, or a `namespaces` entry for the object's namespace.
+- `tag` - an Azure Key Vault tag. The same label keys are matched against the
+  tags of the Key Vault certificate, and a match is reported as `tag`, never as
+  `label`. See [Azure Key Vault](azure.md).
 
 Discovery order does not imply precedence: every matching rule contributes an
 owner. Owners are sorted and de-duplicated, and each keeps its `owner_source`
-and `location`. If no rule matches, the owner list is empty. `owner: ""` means
-"no rule matched", never "the owner is unknown but probably X".
+and `location`. If no rule matches, the `owners` list of that certificate is
+empty. An owner value is never empty: a rule whose owner is an empty string is
+ignored, so `owner: ""` never appears in the output and never means "the owner
+is unknown but probably X". In the top-level `owners` workload summary, a
+certificate with no owner is counted under `(unowned)`.
 
 `app.kubernetes.io/managed-by` is deliberately **not** consulted. It names the
 tooling that manages an object, not the team accountable for its certificate,
