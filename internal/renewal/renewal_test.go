@@ -211,7 +211,7 @@ func TestClassifyConfigRisks(t *testing.T) {
 			wantKind: KindRenewBeforeLoopAtNextLimit, wantEffective: "2026-03-15T00:00:00Z",
 		},
 		{
-			// Source: https://letsencrypt.org/2025/12/02/from-90-to-45 (VERIFY the 64-day step date)
+			// Source: https://letsencrypt.org/2025/12/02/from-90-to-45 (the 64-day step date announced on 2025-12-02, confirmed against the post on 2026-10-20)
 			name:      "renewBefore reaches the next Let's Encrypt lifetime",
 			notBefore: "2026-06-01T00:00:00Z", notAfter: "2026-08-30T00:00:00Z", now: "2026-06-02T00:00:00Z",
 			manager:  &Manager{IssuerType: "acme", ACMEServer: "https://acme-v02.api.letsencrypt.org/directory", RenewBefore: "1680h0m0s"},

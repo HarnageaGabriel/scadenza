@@ -147,9 +147,11 @@ const LetsEncryptDirectoryHost = "acme-v02.api.letsencrypt.org"
 // Encrypt, after the 90-day default of today.
 //
 // Source: https://letsencrypt.org/2025/12/02/from-90-to-45
-// VERIFY: the 64-day step date (announced as 2027-02-10) and the 45-day step
-// date (2028-02-16) against the official post before relying on these dates.
-// They are encoded here so a future date can be evaluated with --now.
+// The 64-day step date (2027-02-10) and the 45-day step date (2028-02-16) are
+// the dates announced by Let's Encrypt on 2025-12-02, confirmed against that
+// post on 2026-10-20. They are announced dates and Let's Encrypt may still
+// change them. They are encoded here so a future date can be evaluated with
+// --now.
 var letsEncryptSteps = []struct {
 	effective time.Time
 	days      int
@@ -608,7 +610,7 @@ func configRisks(in Input, manager *Manager) []Risk {
 			if best == "" || effective < best {
 				best = effective
 				detail = "spec.renewBefore " + manager.RenewBefore + " reaches the next announced Let's Encrypt lifetime of " +
-					strconv.Itoa(days) + " days (announced, not confirmed)"
+					strconv.Itoa(days) + " days (announced by Let's Encrypt on 2025-12-02)"
 			}
 		}
 		if best != "" {

@@ -142,7 +142,7 @@ codes:
     slug: renew-before-loop-at-next-limit
     severity: warning
     summary: Fixed renewBefore reaches the next shorter lifetime
-    explanation: A fixed spec.renewBefore is at or beyond the next CA/B maximum validity, or the next announced Let's Encrypt lifetime for an ACME issuer on acme-v02.api.letsencrypt.org. The next step is chosen at the evaluation instant (--now), so a step that already took effect is never reported with a stale date. Renewal will loop once the shorter lifetime takes effect; the risk records the effective date. The announced Let's Encrypt lifetimes are not confirmed while the VERIFY marker on their dates stands.
+    explanation: A fixed spec.renewBefore is at or beyond the next CA/B maximum validity, or the next announced Let's Encrypt lifetime for an ACME issuer on acme-v02.api.letsencrypt.org. The next step is chosen at the evaluation instant (--now), so a step that already took effect is never reported with a stale date. Renewal will loop once the shorter lifetime takes effect; the risk records the effective date. The Let's Encrypt dates are those announced by Let's Encrypt on 2025-12-02 and may still change.
     remediation: Set spec.renewBeforePercentage so the renewal point follows the actual issued duration.
   - code: SCD-0025
     slug: duration-exceeds-next-limit
