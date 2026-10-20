@@ -112,8 +112,8 @@ type Result struct {
 // BlockSpecialAddresses guards against a host name that comes from untrusted
 // Certificate Transparency data resolving to a special address such as
 // loopback or the cloud metadata address 169.254.169.254. RFC 1918 private
-// ranges and IPv6 unique local addresses are deliberately still probed: an
-// internal estate is a legitimate scan target.
+// ranges, the shared address space and IPv6 unique local addresses are
+// deliberately still probed: an internal estate is a legitimate scan target.
 type Prober struct {
 	Timeout  time.Duration
 	Dialer   Dialer
@@ -126,10 +126,22 @@ type Prober struct {
 	// unspecified address (0.0.0.0 and ::), and everything in 0.0.0.0/8,
 	// including the IPv4-mapped and IPv4-compatible IPv6 forms of each.
 	//
-	// RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
-	// and IPv6 unique local addresses (fc00::/7) are not blocked, because an
-	// internal estate is a legitimate scan target. The default is false, so a
-	// name the user typed keeps its current behaviour.
+	// The IPv6 forms that carry an IPv4 address inside them are unwrapped
+	// and the same rules are applied to the address they carry: the
+	// IPv4-translated prefix (::ffff:0:0:0/96), the NAT64 well-known prefix
+	// (64:ff9b::/96) and the 6to4 prefix (2002::/16). Two prefixes are
+	// refused whole, because the address they carry cannot be found: the
+	// local use NAT64 prefix (64:ff9b:1::/48) and Teredo (2001::/32).
+	//
+	// The well known cloud metadata endpoints are refused by exact address:
+	// 100.100.100.200, 168.63.129.16, 192.0.0.192, 169.254.170.2 and
+	// fd00:ec2::254.
+	//
+	// RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16),
+	// the shared address space (100.64.0.0/10) and IPv6 unique local
+	// addresses (fc00::/7) are not blocked, because an internal estate is a
+	// legitimate scan target. The default is false, so a name the user typed
+	// keeps its current behaviour.
 	BlockSpecialAddresses bool
 }
 
@@ -268,14 +280,32 @@ func filterSpecialAddresses(addresses []string) ([]string, blockedAddress) {
 // ::), and every address in 0.0.0.0/8, together with the IPv4-mapped
 // (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d) IPv6 forms of each.
 //
-// RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) and
-// IPv6 unique local addresses (fc00::/7) are deliberately not blocked: an
-// internal estate is a legitimate scan target.
+// The IPv6 forms that carry an IPv4 address inside them are unwrapped and the
+// same rules are applied to the address they carry: the IPv4-translated
+// prefix (::ffff:0:0:0/96), the NAT64 well-known prefix (64:ff9b::/96), whose
+// embedded address is in the last 32 bits, and the 6to4 prefix (2002::/16),
+// whose embedded address is in bits 16 to 47. Two prefixes are refused whole,
+// because the address they carry cannot be found: the local use NAT64 prefix
+// (64:ff9b:1::/48), where the position of the embedded address depends on the
+// prefix length, and the Teredo prefix (2001::/32), whose payload is
+// obfuscated.
+//
+// The well known cloud metadata endpoints are refused by exact address:
+// 100.100.100.200, 168.63.129.16, 192.0.0.192, 169.254.170.2 and
+// fd00:ec2::254.
+//
+// RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), the
+// shared address space (100.64.0.0/10) and IPv6 unique local addresses
+// (fc00::/7) are deliberately not blocked: an internal estate is a legitimate
+// scan target.
 func specialAddressReason(ip net.IP) string {
 	if ip == nil {
 		return ""
 	}
 	if reason := addressReason(ip); reason != "" {
+		return reason
+	}
+	if reason := prefixReason(ip); reason != "" {
 		return reason
 	}
 	if embedded := embeddedIPv4(ip); embedded != nil {
@@ -303,12 +333,64 @@ func addressReason(ip net.IP) string {
 	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 0 {
 		return "in the 0.0.0.0/8 range"
 	}
+	if isCloudMetadataAddress(ip) {
+		return "a cloud metadata address"
+	}
 	return ""
 }
 
-// embeddedIPv4 returns the IPv4 address carried by an IPv4-mapped
-// (::ffff:a.b.c.d) or IPv4-compatible (::a.b.c.d) IPv6 address, and nil for
-// every other address.
+// The prefixes the guard knows about, as the first bytes of the address on
+// the wire. They are read-only.
+var (
+	// teredoPrefix is 2001::/32.
+	teredoPrefix = []byte{0x20, 0x01, 0x00, 0x00}
+	// localNAT64Prefix is 64:ff9b:1::/48.
+	localNAT64Prefix = []byte{0x00, 0x64, 0xff, 0x9b, 0x00, 0x01}
+	// nat64Prefix is 64:ff9b::/96.
+	nat64Prefix = []byte{0x00, 0x64, 0xff, 0x9b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	// sixToFourPrefix is 2002::/16.
+	sixToFourPrefix = []byte{0x20, 0x02}
+	// ipv4TranslatedPrefix is ::ffff:0:0:0/96.
+	ipv4TranslatedPrefix = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00}
+)
+
+// prefixReason refuses the IPv6 prefixes that carry an IPv4 address the guard
+// cannot find: the local use NAT64 prefix and the Teredo prefix.
+func prefixReason(ip net.IP) string {
+	switch {
+	case hasIPv6Prefix(ip, teredoPrefix):
+		return "a Teredo tunnel address"
+	case hasIPv6Prefix(ip, localNAT64Prefix):
+		return "a local use NAT64 prefix"
+	}
+	return ""
+}
+
+// isCloudMetadataAddress reports whether an address is one of the well known
+// cloud metadata endpoints. They are refused by exact address only: the
+// shared address space (100.64.0.0/10) and the unique local addresses
+// (fc00::/7) around them are used by internal estates and tailnets.
+func isCloudMetadataAddress(ip net.IP) bool {
+	switch ip.String() {
+	case "100.100.100.200", // Alibaba Cloud.
+		"168.63.129.16", // Azure platform address.
+		"192.0.0.192",   // Oracle Cloud.
+		"169.254.170.2", // Already refused as a link-local address.
+		"fd00:ec2::254": // AWS IPv6.
+		return true
+	}
+	return false
+}
+
+// embeddedIPv4 returns the IPv4 address carried inside an IPv6 address form
+// that embeds one, and nil for every other address.
+//
+// The forms are the IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible
+// (::a.b.c.d) addresses, the IPv4-translated addresses of the
+// ::ffff:0:0:0/96 prefix (::ffff:0:a.b.c.d), whose embedded address is in the
+// last 32 bits, the NAT64 addresses of the well-known prefix
+// (64:ff9b::/96), whose embedded address is in the last 32 bits too, and the
+// 6to4 addresses (2002::/16), whose embedded address is in bits 16 to 47.
 func embeddedIPv4(ip net.IP) net.IP {
 	if ip4 := ip.To4(); ip4 != nil {
 		return ip4
@@ -316,12 +398,35 @@ func embeddedIPv4(ip net.IP) net.IP {
 	if len(ip) != net.IPv6len {
 		return nil
 	}
+	switch {
+	case hasIPv6Prefix(ip, nat64Prefix):
+		return ip[12:16]
+	case hasIPv6Prefix(ip, sixToFourPrefix):
+		return ip[2:6]
+	case hasIPv6Prefix(ip, ipv4TranslatedPrefix):
+		return ip[12:16]
+	}
+	// The IPv4-compatible form (::a.b.c.d): the first 96 bits are zero.
 	for _, b := range ip[:12] {
 		if b != 0 {
 			return nil
 		}
 	}
 	return ip[12:16]
+}
+
+// hasIPv6Prefix reports whether an IPv6 address starts with the given prefix
+// bytes.
+func hasIPv6Prefix(ip net.IP, prefix []byte) bool {
+	if len(ip) != net.IPv6len || len(prefix) > len(ip) {
+		return false
+	}
+	for index, value := range prefix {
+		if ip[index] != value {
+			return false
+		}
+	}
+	return true
 }
 
 // handshake reads the peer chain. In-connection verification is disabled on

@@ -69,12 +69,19 @@ func SafeText(value string) string {
 	return capRunes(cleanText(value), MaxDetailRunes)
 }
 
-// cleanText removes control characters (category Cc) and format characters
-// (category Cf, such as the zero width space, the left to right and right to
-// left marks, the embedding and override characters, the isolates, and the
-// byte order mark), plus the line and paragraph separators. Tabs, newlines,
-// and carriage returns become a single space, so a value can never break out
-// of its line.
+// cleanText removes the characters that can hide their presence or forge a
+// log line: control characters (category Cc), format characters (category
+// Cf, such as the zero width space, the left to right and right to left
+// marks, the embedding and override characters, the isolates, and the byte
+// order mark), private use characters (category Co), and unassigned code
+// points (category Cn, to which no category letter applies), plus the line
+// and paragraph separators, the Hangul fillers, the combining grapheme
+// joiner, the Mongolian free variation selectors and vowel separator, and the
+// variation selectors supplement. Tabs, newlines, and carriage returns
+// become a single space, so a value can never break out of its line.
+//
+// The other combining marks stay, including the ordinary variation selectors
+// U+FE00 to U+FE0F, because real scripts and emoji need them.
 //
 // JSON escapes its own control characters and CSV quotes them, but a table is
 // printed literally and a diagnostic line is read literally.
@@ -87,7 +94,26 @@ func cleanText(value string) string {
 			return -1
 		case unicode.Is(unicode.Cf, r):
 			return -1
+		case unicode.Is(unicode.Co, r):
+			return -1
+		case unicode.Is(unicode.Cn, r):
+			return -1
 		case r == '\u2028' || r == '\u2029':
+			return -1
+		// The Hangul fillers take up the width of a syllable but draw no
+		// glyph, so they only pad a name out of shape.
+		case r == '\u115F' || r == '\u1160' || r == '\u3164' || r == '\uFFA0':
+			return -1
+		// The combining grapheme joiner, the Mongolian free variation
+		// selectors and vowel separator, and the variation selectors
+		// supplement draw no glyph. The ordinary variation selectors
+		// U+FE00 to U+FE0F are not in this set, because real scripts and
+		// emoji need them.
+		case r == '\u034F':
+			return -1
+		case r >= '\u180B' && r <= '\u180E':
+			return -1
+		case r >= '\U000E0100' && r <= '\U000E01EF':
 			return -1
 		}
 		return r
