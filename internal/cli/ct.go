@@ -58,8 +58,9 @@ func usageArgs(validate cobra.PositionalArgs) cobra.PositionalArgs {
 }
 
 func productionCTDependencies() ctDependencies {
-	certClient := httpx.New(version.Version, httpx.NewIntervalLimiter(time.Second))
-	crtClient := httpx.New(version.Version, httpx.NewIntervalLimiter(12*time.Second))
+	userAgent := version.Current().Version
+	certClient := httpx.New(userAgent, httpx.NewIntervalLimiter(time.Second))
+	crtClient := httpx.New(userAgent, httpx.NewIntervalLimiter(12*time.Second))
 	return ctDependencies{clock: clock.System{}, sources: map[string]ct.Source{
 		"certspotter": &ct.CertSpotter{Client: certClient, URL: "https://api.certspotter.com/v1/issuances", APIKey: os.Getenv("SCADENZA_CERTSPOTTER_KEY")},
 		"crtsh":       &ct.CrtSH{Client: crtClient, URL: "https://crt.sh/"},

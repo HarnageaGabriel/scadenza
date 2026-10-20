@@ -168,7 +168,7 @@
         "required": ["name", "reason", "detail"],
         "properties": {
           "name": {"type": "string", "minLength": 1},
-          "reason": {"enum": ["wildcard", "host-cap"]},
+          "reason": {"enum": ["wildcard", "host-cap", "invalid-name"]},
           "detail": {"type": "string", "minLength": 1}
         }
       }
@@ -182,7 +182,7 @@
         "properties": {
           "host": {"type": "string", "minLength": 1},
           "port": {"type": "integer", "minimum": 1, "maximum": 65535},
-          "class": {"enum": ["dns", "connect-timeout", "refused", "canceled", "tls-alert", "no-certificate", "handshake-failed"]},
+          "class": {"enum": ["dns", "connect-timeout", "refused", "canceled", "tls-alert", "no-certificate", "handshake-failed", "blocked-address"]},
           "detail": {"type": "string", "minLength": 1}
         }
       }

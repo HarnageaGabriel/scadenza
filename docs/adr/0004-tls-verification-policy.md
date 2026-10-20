@@ -25,7 +25,14 @@ chain contained more than the leaf. The same hook then performs a real
 probed name and stores `trusted: bool` plus the verification error text. Nothing
 presented by a probed server is trusted implicitly; every failure class is
 recorded (`dns`, `connect-timeout`, `refused`, `tls-alert`, `no-certificate`,
-`handshake-failed`).
+`handshake-failed`, `blocked-address`).
+
+The `blocked-address` class is the optional special-address guard: when it is
+enabled for a host, every resolved address is checked before the first dial,
+and a host whose addresses are all loopback, link-local, multicast, or
+unspecified is refused with that class instead of being dialed. The guard is
+enabled for host names that come from Certificate Transparency and disabled for
+the hosts an operator names, so an internal estate stays scannable.
 
 The `gosec` G402 exception is scoped to the single `InsecureSkipVerify`
 assignment in `internal/tlsprobe/tlsprobe.go` and carries a pointer to this ADR.
