@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/HarnageaGabriel/scadenza/internal/version"
 	"github.com/spf13/cobra"
@@ -41,6 +42,33 @@ const interruptedMessage = "interrupted"
 // ExitInterrupted and without a report; a context cancelled for any other
 // reason keeps the ordinary exit codes.
 var ErrInterrupted = errors.New(interruptedMessage)
+
+// ErrDeadlineExceeded is the cancellation cause of a run that reached the
+// maximum duration. Unlike an interrupt, a run that reached the limit still
+// reports what it collected, so the cause is what tells the two apart.
+var ErrDeadlineExceeded = errors.New("deadline exceeded")
+
+// deadlineContext derives the context the command body works under.
+//
+// The limit starts when the command body starts working, not at process start,
+// so the deadline is derived here. The limit is a cause of its own, so an
+// interrupt still wins: the interrupt cancels the run context, and the cause
+// propagates to the derived context.
+//
+// A limit of zero means no limit, and the derived context then only follows
+// the run context.
+func deadlineContext(ctx context.Context, limit time.Duration) (context.Context, context.CancelFunc) {
+	if limit <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeoutCause(ctx, limit, ErrDeadlineExceeded)
+}
+
+// deadlineExceeded reports whether the run stopped because it reached the
+// maximum duration. A cancellation with any other cause is not a deadline.
+func deadlineExceeded(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), ErrDeadlineExceeded)
+}
 
 // Execute runs the CLI and converts command errors to documented exit codes.
 func Execute(args []string, stdout, stderr io.Writer) int {

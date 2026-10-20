@@ -25,6 +25,12 @@ fromCT: true
 # Default probe port (default 443).
 port: 443
 
+# Maximum duration of the whole run (default 0, which means no limit). The
+# value is a Go duration string, such as 10m or 1h30m. A bare number is not a
+# duration and is rejected, and so is a negative value. The command line
+# always wins over this key.
+maxDuration: 10m
+
 kube:
   # Read the Kubernetes source. Every other key in this block requires it: a
   # file that sets one of them while enabled is false is a usage error.
@@ -84,18 +90,23 @@ Command-line flags always win over the file. A value is taken from the file only
 when the matching flag was not set on the command line; otherwise the flag value
 is used. The mapping is one flag per key: `--domain`/`domains`,
 `--host`/`hosts`, `--hosts-file`/`hostsFile`, `--from-ct`/`fromCT`,
-`--port`/`port`, `--kube`/`kube.enabled`, `--kube-secrets`/`kube.secrets`,
-`--kube-context`/`kube.context`,
+`--port`/`port`, `--max-duration`/`maxDuration`, `--kube`/`kube.enabled`,
+`--kube-secrets`/`kube.secrets`, `--kube-context`/`kube.context`,
 `--namespace`/`kube.namespaces`, `--ownership-file`/`kube.ownershipFile`,
 `--azure-keyvault`/`azure.keyVaults`,
 `--fail-on`/`policy.failOn`, `--strict`/`policy.strict`,
 `--min-coverage`/`policy.minCoverage`. There is no flag for `renewal`; it is
 only read from the file.
 
+The file is read by `scadenza scan`, the only command that takes `--config`,
+so `maxDuration` sets the limit of a scan. `scadenza ct` takes the limit on
+the command line only.
+
 ## Validation
 
 Decoding is strict. An unreadable file, an unknown key, a missing or wrong
-`version` (must be `1`), an out-of-range `port` or `minCoverage`, an empty or
+`version` (must be `1`), an out-of-range `port` or `minCoverage`, a
+`maxDuration` that is not a duration string or that is negative, an empty or
 unknown `policy.failOn` list, a `renewal` key that is not a valid domain, a
 `renewal` value other than `manual`, or `none` combined with another kind is a
 usage error (exit 2). Unknown keys and bad values are reported as `SCD-0022`; a

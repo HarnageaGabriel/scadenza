@@ -66,6 +66,31 @@ reaches that cap the result stops there, the source is reported as `partial` in
 one `SCD-0034` warning is written to stderr. A partial source is treated like
 any other partial source, so `--strict` fails the scan (exit 5).
 
+## Maximum duration
+
+`--max-duration 10m` gives the run a time limit, so a CI job cannot wait for
+the sum of many slow requests. The limit is a Go duration (`10m`, `1h30m`,
+`90s`); `0` (the default) means no limit, and a negative value is a usage
+error (exit 2, `SCD-0001`). The limit starts when the scan starts working, not
+when the process starts.
+
+When the limit is reached, every outstanding request is stopped and the run
+still writes its document with what it collected:
+
+- A source that did not finish is `partial`, or `failed` when it produced
+  nothing. The `coverage` object says which one and why.
+- A target that was not probed is counted as not checked, and the coverage
+  ratio falls.
+- One `SCD-0035` warning is written to stderr. The detail names the
+  configured duration and nothing else.
+
+The exit code does not change: the run is incomplete, not clean, so it exits 5
+when `--strict` or `--min-coverage` is not met, and 3 or 0 otherwise. A run in
+which no requested source produced anything exits 4, as any other run with
+every requested source unavailable does. The `maxDuration` key of
+[`scadenza.yaml`](../configuration.md) sets the same limit, and the command
+line wins over the file.
+
 ## Options
 
 - `--domain name` selects a domain to query in CT and to probe. Repeatable.
@@ -76,6 +101,9 @@ any other partial source, so `--strict` fails the scan (exit 5).
 - `--from-ct` (default true) derives probe hosts from non-wildcard CT names.
 - `--port` (default 443), `--concurrency` (default 8), `--timeout` (default 5s),
   `--max-hosts` (default 200).
+- `--max-duration 10m` limits the whole run to a duration (`0`, the default,
+  means no limit). The limit starts when the scan starts working, not when the
+  process starts. See [Maximum duration](#maximum-duration).
 - `--source certspotter,crtsh` selects and orders CT sources.
 - `--format table|json|csv` selects table (default), versioned JSON, or CSV.
 - `--strict` exits 5 (`SCD-0020`) when any source is partial or failed, any probe
@@ -298,7 +326,8 @@ is always printed, and the table adds a one-line summary after the findings.
 - `sources` - one entry per source, always, with `status` `ok`, `partial`,
   `failed`, or `not_requested` and a non-empty `detail`. A chosen fallback source
   that an earlier source made unnecessary is `not_requested` with detail
-  `not needed: earlier source answered`; it is neither failed nor partial.
+  `not needed: earlier source answered`; it is neither failed nor partial. A
+  source that the maximum duration cut short names the limit in its detail.
 - `ratio` - `targets_probed / targets_requested` rounded to four decimals, and
   `1.0` when nothing was requested.
 

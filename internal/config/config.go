@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/HarnageaGabriel/scadenza/internal/ct"
 	"github.com/HarnageaGabriel/scadenza/internal/owner"
@@ -84,6 +85,9 @@ type Config struct {
 	Kube      Kube
 	Azure     Azure
 	Policy    Policy
+	// MaxDuration is the maximum duration of the whole run. It is nil when
+	// the file does not set it, so the command line can decide instead.
+	MaxDuration *time.Duration
 	// Renewal maps a domain to a declared renewal mode (only "manual"). It is
 	// evidence for renewal classification: an automatic mechanism still wins.
 	Renewal map[string]string
@@ -111,16 +115,17 @@ type Policy struct {
 }
 
 type document struct {
-	Version   int               `yaml:"version"`
-	Domains   []string          `yaml:"domains"`
-	Hosts     []string          `yaml:"hosts"`
-	HostsFile string            `yaml:"hostsFile"`
-	FromCT    *bool             `yaml:"fromCT"`
-	Port      *int              `yaml:"port"`
-	Kube      *kubeDoc          `yaml:"kube"`
-	Azure     *azureDoc         `yaml:"azure"`
-	Policy    *policyDoc        `yaml:"policy"`
-	Renewal   map[string]string `yaml:"renewal"`
+	Version     int               `yaml:"version"`
+	Domains     []string          `yaml:"domains"`
+	Hosts       []string          `yaml:"hosts"`
+	HostsFile   string            `yaml:"hostsFile"`
+	FromCT      *bool             `yaml:"fromCT"`
+	Port        *int              `yaml:"port"`
+	MaxDuration *string           `yaml:"maxDuration"`
+	Kube        *kubeDoc          `yaml:"kube"`
+	Azure       *azureDoc         `yaml:"azure"`
+	Policy      *policyDoc        `yaml:"policy"`
+	Renewal     map[string]string `yaml:"renewal"`
 }
 
 type kubeDoc struct {
@@ -189,6 +194,13 @@ func Parse(data []byte) (Config, error) {
 	if decoded.Port != nil && (*decoded.Port < 1 || *decoded.Port > 65535) {
 		return Config{}, fmt.Errorf("%w: port must be between 1 and 65535", ErrInvalid)
 	}
+	if decoded.MaxDuration != nil {
+		duration, err := parseMaxDuration(*decoded.MaxDuration)
+		if err != nil {
+			return Config{}, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+		}
+		config.MaxDuration = &duration
+	}
 	if decoded.Kube != nil {
 		config.Kube = Kube{
 			Enabled:       decoded.Kube.Enabled,
@@ -242,6 +254,30 @@ func normalizeRenewal(values map[string]string) (map[string]string, error) {
 		result[normalized] = value
 	}
 	return result, nil
+}
+
+// parseMaxDuration parses the maxDuration value of a configuration file.
+//
+// The value is a duration string such as 10m or 1h30m, the same format the
+// --max-duration flag accepts. A bare number is not a duration, so it is
+// rejected instead of being read with an unknown unit, and a negative
+// duration is rejected because a limit cannot run backwards.
+//
+// The message names the key and the expected format, never the value, so a
+// file that carries an unexpected value cannot smuggle text into the output.
+func parseMaxDuration(value string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0, errors.New("maxDuration must be a duration such as 10m")
+	}
+	duration, err := time.ParseDuration(trimmed)
+	if err != nil {
+		return 0, errors.New("maxDuration must be a duration such as 10m")
+	}
+	if duration < 0 {
+		return 0, errors.New("maxDuration must not be negative")
+	}
+	return duration, nil
 }
 
 // ParseFailOn parses a comma-separated --fail-on value.

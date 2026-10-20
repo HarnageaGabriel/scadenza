@@ -36,3 +36,4 @@ Generated from `internal/diag/registry.yaml`. Do not edit by hand.
 - [SCD-0032 — Azure Key Vault source is unavailable](SCD-0032.md)
 - [SCD-0033 — An Azure Key Vault certificate was skipped](SCD-0033.md)
 - [SCD-0034 — Certificate Transparency result stopped at the entry cap](SCD-0034.md)
+- [SCD-0035 — Run reached the maximum duration](SCD-0035.md)

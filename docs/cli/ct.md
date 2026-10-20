@@ -15,6 +15,11 @@ Options:
 - `--expired` retains certificates whose `not_after` is earlier than the current time.
 - `--format table|json|csv` selects table (default), versioned JSON, or CSV.
 - `--max-results N` limits output to 1000 certificates by default.
+- `--max-duration 10m` limits the whole lookup to one duration (`0`, the
+  default, means no limit). The limit starts when the lookup starts working.
+  When the limit is reached, the outstanding query is stopped, one `SCD-0035`
+  warning is written to stderr, and the command exits 4, because no source
+  produced data. A negative value is a usage error (exit 2).
 - `--now RFC3339` fixes the evaluation instant, so the same input gives the
   same output and you can evaluate against a future date. It also sets
   `generated_at`.

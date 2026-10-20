@@ -32,6 +32,21 @@ condition is still emitted as warning-severity `SCD-0020`.
 - **5 before 0.** An otherwise clean scan that did not check everything it was
   asked to check still exits non-zero.
 
+## Maximum duration
+
+`--max-duration` gives a run a time limit. It adds no exit code: a run that
+reaches the limit is an incomplete run, not a new kind of failure.
+
+- The run still writes its document with what it collected, so the report is
+  never lost. One `SCD-0035` warning is written to stderr.
+- The exit code is the one the run would have had: 5 when `--strict` or
+  `--min-coverage` is not met, 3 when a blocking finding is present, and 0
+  otherwise.
+- A run in which every requested source produced nothing exits 4, the same as
+  any other run in which every requested source was unavailable.
+- An interrupt still wins: a run that is interrupted exits 130 and writes no
+  document, even when a limit is configured.
+
 ## Failure policy
 
 `--fail-on` selects which finding kinds cause exit 3. The default is
@@ -47,4 +62,5 @@ code changes.
 ## `scadenza ct`
 
 `scadenza ct` exits `0` on success, `2` on a usage or input error, `4` when
-every selected source failed, and `130` when the run was interrupted.
+every selected source failed, and `130` when the run was interrupted. A run
+that reaches `--max-duration` exits 4, because no source produced data.
