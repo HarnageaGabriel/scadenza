@@ -1,6 +1,6 @@
 module github.com/HarnageaGabriel/scadenza
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates v1.5.0
