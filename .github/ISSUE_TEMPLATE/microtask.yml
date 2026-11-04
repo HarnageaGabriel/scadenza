@@ -1,0 +1,61 @@
+name: Microtask
+description: A small, independent unit of work with its own complete brief (see docs/workflow.md)
+title: "<area>: <one observable change>"
+labels: [microtask, "status:ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A microtask is finished in under two hours and changes under 400 lines. Add one `size:`, one `kind:` and one or more `area:` labels, and the `wave-N` milestone. The method is in [docs/workflow.md](../blob/main/docs/workflow.md).
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One or two sentences. The observable change.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The finding, defect or documented promise this comes from, with a link to the review, pull request or document.
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Files you may change
+      description: The only paths this task edits, one per line. Anything else is out of scope.
+      placeholder: |
+        internal/render/sanitize.go
+        internal/render/sanitize_test.go
+    validations:
+      required: true
+  - type: textarea
+    id: donottouch
+    attributes:
+      label: Do not touch
+      description: Files that look related but belong to another task.
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Commands that must pass and results that must be true. For a test task, say which change to the code each new test must catch.
+      placeholder: |
+        - go test ./internal/render/... passes
+        - TestX fails when <the specific change> is made in <file>
+    validations:
+      required: true
+  - type: input
+    id: depends
+    attributes:
+      label: Depends on
+      description: Issue numbers that must be closed first, or `none`.
+      value: none
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Constraints, traps and decisions already made.
