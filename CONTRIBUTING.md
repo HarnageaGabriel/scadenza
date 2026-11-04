@@ -45,6 +45,11 @@ pull request.
 Open a draft pull request early. Keep changes focused, link the issue and
 describe what you tested.
 
+Work is split into small independent issues called microtasks, each with its
+own brief, file list and acceptance commands. Pick an issue labelled
+`status:ready`, and see [docs/workflow.md](docs/workflow.md) for the method,
+including how pull requests close their issue and how they are merged in order.
+
 ## Security
 
 Do not report vulnerabilities in public issues or pull requests. Use private
