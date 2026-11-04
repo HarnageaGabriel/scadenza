@@ -52,7 +52,7 @@ What the job does:
 - `artifacts: when: always` uploads the report even when the job fails.
 
 Replace `example.com` with your domain. The image must provide the Go
-version declared in `go.mod` (1.26.9).
+version declared in `go.mod` (1.26.10).
 
 ## Secrets
 

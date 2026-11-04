@@ -88,7 +88,7 @@ go install github.com/HarnageaGabriel/scadenza/cmd/scadenza@4ea3e622a8494b0a6333
 ```
 
 Replace the commit with the `main` commit you want to trust, and move it
-forward deliberately. The module declares Go 1.26.9, so the build image must
+forward deliberately. The module declares Go 1.26.10, so the build image must
 provide it or let the Go toolchain download it (`GOTOOLCHAIN=auto`, the
 default). `@main` in an automated pipeline installs whatever the branch points
 to at run time.

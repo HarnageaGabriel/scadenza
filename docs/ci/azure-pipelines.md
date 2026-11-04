@@ -21,7 +21,7 @@ variables:
 steps:
   - task: GoTool@0
     inputs:
-      version: '1.26.9'
+      version: '1.26.10'
   - script: |
       set -euo pipefail
       go install github.com/HarnageaGabriel/scadenza/cmd/scadenza@"$SCADENZA_COMMIT"
@@ -45,7 +45,7 @@ steps:
 ```
 
 - `GoTool@0` installs the Go toolchain. The version must match the one in
-  `go.mod` (1.26.9), and `go install` writes the binary to
+  `go.mod` (1.26.10), and `go install` writes the binary to
   `$(go env GOPATH)/bin`, which the agent puts on `PATH`.
 - The report is stdout, so `> scadenza.json` keeps it. Warnings and
   diagnostics go to stderr and stay in the log.
