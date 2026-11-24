@@ -24,6 +24,13 @@ func signalContext() (context.Context, func()) {
 		if root.Err() == nil {
 			cancel(cli.ErrInterrupted)
 		}
+		// A second signal must be fatal. The notification is stopped here, so
+		// the default disposition of the signal returns: the next Ctrl-C (or
+		// SIGTERM) kills the process at once instead of leaving a run that
+		// is still winding down behind it. The cause is set before the
+		// notification stops, so the run that is stopping still reports the
+		// interrupt.
+		stop()
 	}()
 	return root, func() {
 		cancel(context.Canceled)

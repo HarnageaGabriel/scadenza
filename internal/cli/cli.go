@@ -33,8 +33,10 @@ const (
 	ExitInterrupted = 130
 )
 
-// interruptedMessage is the one line a stopped run writes to stderr. It is
-// static text, so it never carries a value from the interrupted run.
+// interruptedMessage is the last line a stopped run writes to stderr. It is
+// static text, so it never carries a value from the interrupted run. The
+// diagnostics a run printed before the interrupt stay on stderr, so the
+// interrupt is the last line and not the only one.
 const interruptedMessage = "interrupted"
 
 // ErrInterrupted is the cancellation cause of a run that was stopped by an
@@ -47,6 +49,17 @@ var ErrInterrupted = errors.New(interruptedMessage)
 // maximum duration. Unlike an interrupt, a run that reached the limit still
 // reports what it collected, so the cause is what tells the two apart.
 var ErrDeadlineExceeded = errors.New("deadline exceeded")
+
+// runState holds the facts about a run that the exit code depends on. The
+// command body writes them and the exit code reads them, so it is shared by
+// pointer.
+type runState struct {
+	// documentWritten records that the whole document was written to
+	// stdout. A run that already wrote its document is complete, so a
+	// signal that arrives afterwards does not turn the finished run into an
+	// interrupted one.
+	documentWritten bool
+}
 
 // deadlineContext derives the context the command body works under.
 //
@@ -77,8 +90,11 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 
 // ExecuteContext runs the CLI under the given context and converts command
 // errors to documented exit codes. Cancelling the context with ErrInterrupted
-// stops the run: no report is written, one line is written to stderr, and the
-// run exits with ExitInterrupted.
+// stops the run: no report is written, the last line on stderr is
+// `interrupted`, and the run exits with ExitInterrupted.
+//
+// A run that already wrote its document is complete, so an interrupt that
+// arrives after the write keeps the exit code the results decide.
 func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return execute(ctx, args, stdout, stderr, productionCTDependencies())
 }
@@ -89,12 +105,20 @@ func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer
 // command line is only checked against the complete command tree after the
 // run.
 func execute(ctx context.Context, args []string, stdout, stderr io.Writer, dependencies ctDependencies) int {
-	root := newRootCommand(stdout, stderr, dependencies)
+	if interrupted(ctx) {
+		// The run was interrupted before the command body started, so it
+		// does nothing at all: no document, and not even the version text
+		// or the help text.
+		_, _ = fmt.Fprintln(stderr, interruptedMessage)
+		return ExitInterrupted
+	}
+	state := &runState{}
+	root := newRootCommand(stdout, stderr, dependencies, state)
 	root.SetArgs(args)
 	err := root.ExecuteContext(ctx)
-	if interrupted(ctx) {
-		// The run was stopped by a signal. It reports nothing: a partial
-		// document would look like a result.
+	if interrupted(ctx) && !state.documentWritten {
+		// The run was stopped by a signal before it wrote its document. It
+		// reports nothing: a partial document would look like a result.
 		_, _ = fmt.Fprintln(stderr, interruptedMessage)
 		return ExitInterrupted
 	}
@@ -118,9 +142,14 @@ func interrupted(ctx context.Context) bool {
 }
 
 // writeDocument renders the document into a buffer and writes it to stdout
-// only when the run was not interrupted, so an interrupted run never leaves a
-// partial document on stdout.
-func writeDocument(ctx context.Context, stdout io.Writer, render func(io.Writer) error) error {
+// only when the run was not interrupted; a partial write happens only when
+// the write itself fails. The check takes the run context, not the deadline
+// context derived from it: once the deadline fired, the derived cause stays
+// the deadline cause and would hide a later interrupt on the run context.
+//
+// The state records that the document was written, so a signal that arrives
+// after the write does not change the exit code of a finished run.
+func writeDocument(ctx context.Context, stdout io.Writer, state *runState, render func(io.Writer) error) error {
 	var buffer bytes.Buffer
 	if err := render(&buffer); err != nil {
 		return fmt.Errorf("render output: %w", err)
@@ -131,6 +160,7 @@ func writeDocument(ctx context.Context, stdout io.Writer, render func(io.Writer)
 	if _, err := stdout.Write(buffer.Bytes()); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
+	state.documentWritten = true
 	return nil
 }
 
@@ -141,7 +171,7 @@ func printUsageError(root *cobra.Command, err error) {
 	root.PrintErrf("Run '%v --help' for usage.\n", root.CommandPath())
 }
 
-func newRootCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.Command {
+func newRootCommand(stdout, stderr io.Writer, dependencies ctDependencies, state *runState) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "scadenza",
 		Short:         "Inspect public TLS certificate readiness",
@@ -151,9 +181,9 @@ func newRootCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return &commandError{code: ExitUsageError, err: err} })
-	versionCommand := newVersionCommand(stdout)
-	ctCommand := newCTCommand(stdout, stderr, dependencies)
-	scanCommand := newScanCommand(stdout, stderr, dependencies)
+	versionCommand := newVersionCommand(stdout, state)
+	ctCommand := newCTCommand(stdout, stderr, dependencies, state)
+	scanCommand := newScanCommand(stdout, stderr, dependencies, state)
 	root.AddCommand(versionCommand)
 	root.AddCommand(ctCommand)
 	root.AddCommand(scanCommand)
@@ -182,21 +212,32 @@ func usageArgsFor(command *cobra.Command) {
 	}
 }
 
-func newVersionCommand(stdout io.Writer) *cobra.Command {
+func newVersionCommand(stdout io.Writer, state *runState) *cobra.Command {
 	var asJSON bool
 	command := &cobra.Command{
 		Use:   "version",
 		Short: "Print build version information",
 		Args:  usageArgs(cobra.NoArgs),
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if interrupted(cmd.Context()) {
+				// The run was interrupted before the body started working, so
+				// it prints nothing at all, not even the version.
+				return &commandError{code: ExitInterrupted}
+			}
 			info := version.Current()
 			if asJSON {
 				encoder := json.NewEncoder(stdout)
 				encoder.SetEscapeHTML(false)
-				return encoder.Encode(info)
+				if err := encoder.Encode(info); err != nil {
+					return err
+				}
+			} else if _, err := fmt.Fprintf(stdout, "scadenza %s\ncommit: %s\ndate: %s\n", info.Version, info.Commit, info.Date); err != nil {
+				return err
 			}
-			_, err := fmt.Fprintf(stdout, "scadenza %s\ncommit: %s\ndate: %s\n", info.Version, info.Commit, info.Date)
-			return err
+			// The version text is the whole document of this command, so a
+			// signal after it keeps the exit code of a finished run.
+			state.documentWritten = true
+			return nil
 		},
 	}
 	command.Flags().BoolVar(&asJSON, "json", false, "print version information as JSON")

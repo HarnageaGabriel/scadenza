@@ -97,7 +97,7 @@ func (set *diagnosticSet) addSeverity(code string, severity diag.Severity) {
 	set.items = append(set.items, item)
 }
 
-func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.Command {
+func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies, state *runState) *cobra.Command {
 	var domains []string
 	var hosts []string
 	var hostsFile string
@@ -123,6 +123,11 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 		Short: "Correlate Certificate Transparency issuances with live TLS handshakes",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(command *cobra.Command, _ []string) error {
+			if interrupted(command.Context()) {
+				// The run was interrupted before the body started working, so
+				// it writes nothing at all: no document and no diagnostic.
+				return &commandError{code: ExitInterrupted}
+			}
 			if configPath != "" {
 				loaded, loadErr := config.Load(configPath)
 				if loadErr != nil {
@@ -544,7 +549,7 @@ func newScanCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobr
 				document.Diagnostics = diagnostics.items
 			}
 
-			if err := writeDocument(ctx, stdout, func(writer io.Writer) error {
+			if err := writeDocument(command.Context(), stdout, state, func(writer io.Writer) error {
 				return render.ScanGrouped(writer, format, document, groupBy)
 			}); err != nil {
 				return err

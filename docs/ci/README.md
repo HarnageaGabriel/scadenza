@@ -32,8 +32,23 @@ failures, and a pipeline that collected no data must not be green. If a
 Certificate Transparency outage must not block a merge, allow 4 explicitly and
 keep 3 and 5 blocking.
 
-A CI system that cancels a job sends `SIGTERM`: scadenza stops the scan, writes
-no report, and exits 130.
+A CI system that cancels a job sends `SIGTERM`. If the signal arrives before
+the report is written, scadenza stops the scan, writes no report, and exits
+130. The last line on stderr is `interrupted`; the diagnostics printed before
+the interrupt stay. A run that already wrote its document is complete, so a
+signal that arrives after the write keeps the exit code the results decide.
+A second `SIGTERM`, or a second Ctrl-C, ends the process at once, so a job
+that has to be stopped hard does not wait for a scan that is already winding
+down.
+
+A kubeconfig exec credential plugin, and the `az` CLI when Azure Key Vault
+needs a token, run as a child process of scadenza in the same process group.
+A Ctrl-C in the terminal therefore reaches the child as well. A CI system that
+cancels a job usually sends `SIGTERM` to scadenza alone. The exec plugin then
+keeps running until it finishes on its own: client-go starts it without the
+run context, so it is outside scadenza's control, and a pipeline that must not
+leave it behind has to stop the whole process group. The `az` CLI is started
+with the run context, so cancelling the run kills it as well.
 
 ## Recommended strictness
 
@@ -88,7 +103,7 @@ go install github.com/HarnageaGabriel/scadenza/cmd/scadenza@4ea3e622a8494b0a6333
 ```
 
 Replace the commit with the `main` commit you want to trust, and move it
-forward deliberately. The module declares Go 1.26.10, so the build image must
+forward deliberately. The module declares Go 1.26.11, so the build image must
 provide it or let the Go toolchain download it (`GOTOOLCHAIN=auto`, the
 default). `@main` in an automated pipeline installs whatever the branch points
 to at run time.
