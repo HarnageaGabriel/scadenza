@@ -67,7 +67,7 @@ func productionCTDependencies() ctDependencies {
 	}, prober: tlsprobe.New(), loadKube: kube.Load, loadAzure: azurekv.Load}
 }
 
-func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.Command {
+func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies, state *runState) *cobra.Command {
 	var sourceNames []string
 	var includeSubdomains, expired bool
 	var format string
@@ -77,6 +77,11 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 	command := &cobra.Command{
 		Use: "ct <domain>", Short: "List certificates issued for a domain", Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(command *cobra.Command, args []string) error {
+			if interrupted(command.Context()) {
+				// The run was interrupted before the body started working, so
+				// it writes nothing at all: no document and no diagnostic.
+				return &commandError{code: ExitInterrupted}
+			}
 			domain, err := ct.NormalizeDomain(args[0])
 			if err != nil {
 				emitDiagnostic(stderr, "SCD-0001", "")
@@ -169,7 +174,7 @@ func newCTCommand(stdout, stderr io.Writer, dependencies ctDependencies) *cobra.
 				emitDiagnostic(stderr, "SCD-0005", domain)
 			}
 			document := render.CTDocument{SchemaVersion: "scadenza.ct/v1", Domain: domain, GeneratedAt: now.UTC(), SourcesUsed: used, Certificates: certificates, Diagnostics: diagnostics}
-			if err := writeDocument(ctx, stdout, func(writer io.Writer) error {
+			if err := writeDocument(command.Context(), stdout, state, func(writer io.Writer) error {
 				return render.CT(writer, format, document)
 			}); err != nil {
 				return err

@@ -345,8 +345,11 @@ entry, never exit 4, and partial failures are warnings. `3` when a finding of a
 kind selected by `--fail-on` is present. `5` when `--strict` or `--min-coverage`
 is not met and nothing else applies. When `4` or `3` wins, `SCD-0020` is still
 emitted as a warning so an incomplete scan is not hidden. `2` on usage errors.
-`130` when the run is interrupted: the scan stops, writes no document, and
-writes the line `interrupted` to stderr. See [exit codes](../exit-codes.md).
+`130` when the run is interrupted before it writes its document: the scan
+stops, writes no document, and the last line on stderr is `interrupted`. The
+diagnostics the scan printed before the interrupt stay. A signal that arrives
+after the document was written keeps the exit code the results decide. See
+[exit codes](../exit-codes.md).
 
 ## Output
 

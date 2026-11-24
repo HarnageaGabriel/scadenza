@@ -28,6 +28,7 @@ All notable changes are listed here. Format: Keep a Changelog.
 ### Details
 
 - Pin Go 1.26.10 in `go.mod`: Go 1.26.9 carries GO-2026-6809 in `crypto/x509`, fixed in 1.26.10.
+- Handle interrupt signals: `SIGINT` and `SIGTERM` stop the run with exit 130 and no document, the last line on stderr is `interrupted` and the diagnostics printed before the interrupt stay; a second signal ends the process at once; a run interrupted before the command body starts writes nothing at all, not even the version text; and a signal that arrives after the document or the version text was written keeps the exit code the results decide.
 - Harden metadata-only Kubernetes mode: build the metadata client with only the `PartialObjectMetadataList` media types, reject any other successful JSON response without echoing its body so a server that ignores the request cannot return full Secret objects, and emit `SCD-0029` whenever Secret data reads are requested even when the Kubernetes client cannot be built.
 - Add a release rehearsal workflow that runs GoReleaser in snapshot mode and checks the checksums, the six archives, one valid SPDX SBOM per archive, and the version reported by the Linux binary without publishing; fix the SBOM arguments so syft receives the `${artifact}` and `${document}` placeholders instead of unexpanded GoReleaser templates.
 - Pin Go 1.26.9 in `go.mod` and run the vulnerability scan with the same toolchain the releases are built with, so `govulncheck` evaluates the shipped Go version.
