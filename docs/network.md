@@ -55,7 +55,13 @@ once, dials the first address that accepts a connection, completes the
 handshake, records the chain, and closes the connection. No application bytes
 are sent and the probed server is never trusted: the chain is verified again
 afterwards against the system roots, and the verdict is reported rather than
-acted on (`internal/tlsprobe/tlsprobe.go`, `capture`).
+acted on (`internal/tlsprobe/tlsprobe.go`, `capture`). The prober keeps at most
+16 certificates of a presented chain (`maxChainCertificates`); the rest are
+ignored and the truncation is noted in `verify_error`, so a hostile server
+cannot force unbounded parsing or verification work and memory. The leaf is
+always first, so it is never dropped, and the kept certificates are verified
+exactly as before. A chain that needs an intermediate beyond the 16th is
+therefore reported untrusted.
 
 Two limits shape the target set. Explicitly named targets are never displaced
 by `--max-hosts`; names derived from CT are trimmed to that cap and the trimmed
