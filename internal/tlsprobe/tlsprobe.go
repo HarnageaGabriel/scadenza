@@ -51,6 +51,12 @@ const (
 // errNoCertificate reports a handshake that yielded no leaf certificate.
 var errNoCertificate = errors.New("server presented no certificate")
 
+// maxChainCertificates bounds how many certificates of a presented chain the
+// prober keeps: a hostile server could present an arbitrarily long chain, and
+// parsing and verifying all of it would make work and memory unbounded. The
+// leaf is first, so it is always kept; real chains are far shorter than 16.
+const maxChainCertificates = 16
+
 // systemCertPool loads the platform root pool. It is a variable so the failure
 // path can be exercised without corrupting the real system trust store.
 var systemCertPool = x509.SystemCertPool
@@ -451,6 +457,10 @@ func capture(result *Result, rawCerts [][]byte, roots *x509.CertPool, rootsErr e
 	if len(rawCerts) == 0 {
 		return errNoCertificate
 	}
+	truncated := len(rawCerts) > maxChainCertificates
+	if truncated {
+		rawCerts = rawCerts[:maxChainCertificates]
+	}
 	leaf, err := x509.ParseCertificate(rawCerts[0])
 	if err != nil {
 		return fmt.Errorf("parse leaf certificate: %w", err)
@@ -467,7 +477,7 @@ func capture(result *Result, rawCerts [][]byte, roots *x509.CertPool, rootsErr e
 	result.ChainHasIntermediate = len(rawCerts) > 1
 	if rootsErr != nil {
 		result.Trusted = false
-		result.VerifyError = "load system roots: " + rootsErr.Error()
+		result.VerifyError = truncationDetail("load system roots: "+rootsErr.Error(), truncated)
 		return nil
 	}
 	options := x509.VerifyOptions{Roots: roots, Intermediates: x509.NewCertPool(), CurrentTime: now}
@@ -489,7 +499,22 @@ func capture(result *Result, rawCerts [][]byte, roots *x509.CertPool, rootsErr e
 	} else {
 		result.Trusted = true
 	}
+	result.VerifyError = truncationDetail(result.VerifyError, truncated)
 	return nil
+}
+
+// truncationDetail notes a truncated chain in the verify detail without
+// discarding a verification error, so truncation stays visible even when the
+// kept certificates verify.
+func truncationDetail(detail string, truncated bool) string {
+	if !truncated {
+		return detail
+	}
+	note := fmt.Sprintf("chain truncated to %d certificates", maxChainCertificates)
+	if detail == "" {
+		return note
+	}
+	return detail + "; " + note
 }
 
 func subjectNames(leaf *x509.Certificate) []string {

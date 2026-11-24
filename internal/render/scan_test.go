@@ -417,3 +417,31 @@ func TestScanTableRisksAndGrouping(t *testing.T) {
 		}
 	}
 }
+
+func TestScanTableASCIIOutputUnchanged(t *testing.T) {
+	yes := true
+	document := ScanDocument{Certificates: []inventory.Certificate{
+		{Fingerprint: strings.Repeat("a", 64), Serial: "1b", Names: []string{"api.example.com"}, Issuer: "CN=Example CA", Verdict100D: "ok", Public: &yes, Observations: []inventory.Observation{{Source: inventory.SourceTLS}}, Owners: []owner.Owner{{Value: "team-web", Source: owner.SourceLabel}}, Renewal: renewal.Classification{Mode: renewal.ModeAutomatic, Health: renewal.HealthDegraded, Risks: []renewal.Risk{{Kind: renewal.KindRenewalDegraded, Detail: "Ready=False"}}}},
+		{Fingerprint: strings.Repeat("b", 64), Names: []string{"www.example.com"}, Verdict100D: "ok", Public: &yes, Renewal: renewal.Classification{Mode: renewal.ModeUnknown, Health: renewal.HealthUnknown}},
+	}, Findings: []inventory.Finding{{Kind: inventory.KindCTOnly, Fingerprint: strings.Repeat("b", 64), Names: []string{"www.example.com"}, Detail: "no live observation"}}, Coverage: inventory.Coverage{TargetsRequested: 2, TargetsProbed: 1, Ratio: 0.5, Sources: []inventory.SourceCoverage{{Name: "tls", Status: "ok"}}}}
+	var output bytes.Buffer
+	if err := ScanGrouped(&output, "table", document, GroupOwner); err != nil {
+		t.Fatal(err)
+	}
+	const want = `FINGERPRINT SHA256  SERIAL  DAYS  100D  MODE  HEALTH  PUBLIC  OBSERVATIONS  ISSUER  NAMES  OWNERS
+GROUP owner: (unowned)
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb    0  ok  unknown  unknown  yes  -    www.example.com  -
+GROUP owner: team-web
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  1b  0  ok  automatic  degraded  yes  tls  CN=Example CA  api.example.com  team-web (label)
+FINDINGS
+KIND     FINGERPRINT                                                       NAMES            DETAIL
+ct_only  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  www.example.com  no live observation
+RISKS
+KIND              FINGERPRINT                                                       NAMES            EFFECTIVE  DETAIL
+renewal-degraded  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  api.example.com  -          Ready=False
+COVERAGE requested=2 probed=1 failed=0 not_checked=0 ratio=50.00% sources=tls:ok
+`
+	if output.String() != want {
+		t.Fatalf("ASCII table output changed:\ngot  %q\nwant %q", output.String(), want)
+	}
+}
