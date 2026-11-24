@@ -28,6 +28,7 @@ All notable changes are listed here. Format: Keep a Changelog.
 ### Details
 
 - Pad table columns by terminal display width instead of rune count, so CJK, fullwidth, and emoji cells no longer shift the columns after them; ASCII table output is byte-identical.
+- Cap the TLS prober's kept chain at 16 certificates (`maxChainCertificates`) so a hostile server cannot force unbounded work or memory; the leaf is always kept, the kept certificates are verified as before (a chain that needs an intermediate beyond the 16th is reported untrusted), and the truncation is noted in `verify_error`.
 - Pin Go 1.26.11 in `go.mod`: Go 1.26.10 carries GO-2026-6859 in `net/http`, fixed in 1.26.11; 1.26.10 fixed GO-2026-6809 in `crypto/x509`.
 - Handle interrupt signals: `SIGINT` and `SIGTERM` stop the run with exit 130 and no document, the last line on stderr is `interrupted` and the diagnostics printed before the interrupt stay; a second signal ends the process at once; a run interrupted before the command body starts writes nothing at all, not even the version text; and a signal that arrives after the document or the version text was written keeps the exit code the results decide.
 - Harden metadata-only Kubernetes mode: build the metadata client with only the `PartialObjectMetadataList` media types, reject any other successful JSON response without echoing its body so a server that ignores the request cannot return full Secret objects, and emit `SCD-0029` whenever Secret data reads are requested even when the Kubernetes client cannot be built.
