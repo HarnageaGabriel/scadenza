@@ -2,12 +2,12 @@
 package render
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
-	"text/tabwriter"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -119,7 +119,7 @@ func csvSafe(value string) string {
 }
 
 func writeTable(writer io.Writer, certificates []ct.Certificate) error {
-	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
+	table := newTableWriter(writer)
 	if _, err := fmt.Fprintln(table, "NOT BEFORE\tNOT AFTER\tDAYS\t100D\tFINGERPRINT SHA256\tSERIAL\tREVOKED\tISSUER\tNAMES\tSOURCE"); err != nil {
 		return err
 	}
@@ -144,6 +144,80 @@ func writeTable(writer io.Writer, certificates []ct.Certificate) error {
 		}
 	}
 	return table.Flush()
+}
+
+// tableWriter aligns tab-separated cells by terminal display width.
+// text/tabwriter pads by rune count, so a fullwidth or emoji cell shifts
+// every column after it; padding by displayWidth keeps the columns aligned.
+type tableWriter struct {
+	writer io.Writer
+	buf    bytes.Buffer
+}
+
+func newTableWriter(writer io.Writer) *tableWriter {
+	return &tableWriter{writer: writer}
+}
+
+func (t *tableWriter) Write(p []byte) (int, error) {
+	return t.buf.Write(p)
+}
+
+// Flush writes the buffered lines, padding each column to its widest cell
+// plus two spaces, the layout text/tabwriter produced for ASCII tables.
+// Single-cell lines (section and group headers) pass through untouched and
+// start a new column block, as tabwriter did.
+func (t *tableWriter) Flush() error {
+	text := t.buf.String()
+	t.buf.Reset()
+	if text == "" {
+		return nil
+	}
+	var block [][]string
+	for _, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
+		cells := strings.Split(line, "\t")
+		if len(cells) == 1 {
+			if err := t.flushBlock(block); err != nil {
+				return err
+			}
+			block = nil
+			if _, err := fmt.Fprintln(t.writer, line); err != nil {
+				return err
+			}
+			continue
+		}
+		block = append(block, cells)
+	}
+	return t.flushBlock(block)
+}
+
+func (t *tableWriter) flushBlock(block [][]string) error {
+	widths := make([]int, 0)
+	for _, cells := range block {
+		for column := 0; column < len(cells)-1; column++ {
+			for len(widths) <= column {
+				widths = append(widths, 0)
+			}
+			if width := displayWidth(cells[column]) + 2; width > widths[column] {
+				widths[column] = width
+			}
+		}
+	}
+	for _, cells := range block {
+		for column, cell := range cells {
+			if _, err := io.WriteString(t.writer, cell); err != nil {
+				return err
+			}
+			if column < len(cells)-1 {
+				if _, err := io.WriteString(t.writer, strings.Repeat(" ", widths[column]-displayWidth(cell))); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := io.WriteString(t.writer, "\n"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func displayNames(names []string) string {
