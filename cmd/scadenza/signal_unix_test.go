@@ -77,26 +77,32 @@ func TestSecondSignalIsFatal(t *testing.T) {
 // run with a first signal and then keeps sending signals until the default
 // disposition of the signal kills it.
 func secondSignalProcess() {
+	os.Exit(secondSignalExitCode())
+}
+
+// secondSignalExitCode returns the exit code instead of calling os.Exit so
+// the deferred stop runs before the process exits.
+func secondSignalExitCode() int {
 	ctx, stop := signalContext()
 	defer stop()
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
-		os.Exit(2)
+		return 2
 	}
 	select {
 	case <-ctx.Done():
 	case <-time.After(10 * time.Second):
-		os.Exit(3)
+		return 3
 	}
 	deadline := time.After(10 * time.Second)
 	for {
 		if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
-			os.Exit(4)
+			return 4
 		}
 		select {
 		case <-deadline:
 			// The signal never became fatal, so the notification was not
 			// stopped after the first signal.
-			os.Exit(5)
+			return 5
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
