@@ -5,9 +5,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -161,6 +163,78 @@ func TestProbeReadsPresentedCertificate(t *testing.T) {
 	}
 	if !trusted.Trusted || trusted.VerifyError != "" {
 		t.Fatalf("expected trusted chain, got %v (%q)", trusted.Trusted, trusted.VerifyError)
+	}
+}
+
+func TestProbeCapsPresentedChain(t *testing.T) {
+	ca, caKey := authority(t)
+	chain := make([]*x509.Certificate, maxChainCertificates)
+	keys := make([]*ecdsa.PrivateKey, maxChainCertificates)
+	chain[maxChainCertificates-1], keys[maxChainCertificates-1] = ca, caKey
+	for i := maxChainCertificates - 2; i >= 1; i-- {
+		template := &x509.Certificate{
+			SerialNumber:          big.NewInt(int64(i + 1)),
+			Subject:               pkix.Name{CommonName: fmt.Sprintf("Test Intermediate %d", i)},
+			NotBefore:             testNow.Add(-time.Hour),
+			NotAfter:              testNow.Add(24 * 365 * time.Hour),
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+			KeyUsage:              x509.KeyUsageCertSign,
+		}
+		chain[i], keys[i], _ = signedCertificate(t, template, chain[i+1], keys[i+1])
+	}
+	leafCert, _, leaf := signedCertificate(t, leafTemplate([]string{"long-chain.test"}, 90*24*time.Hour), chain[1], keys[1])
+	chain[0] = leafCert
+	ders := make([][]byte, 40)
+	for i, certificate := range chain {
+		ders[i] = certificate.Raw
+	}
+	for i := maxChainCertificates; i < len(ders); i++ {
+		ders[i] = ca.Raw
+	}
+	leaf.Certificate = ders
+	host, port := serve(t, &tls.Config{Certificates: []tls.Certificate{leaf}})
+
+	pool := x509.NewCertPool()
+	pool.AddCert(ca)
+	prober := &Prober{Clock: clock.Fixed{Time: testNow}, Timeout: 5 * time.Second, Roots: pool}
+	result, err := prober.Probe(context.Background(), host, port, "long-chain.test")
+	if err != nil {
+		t.Fatalf("probe of a 40-certificate chain failed: %v", err)
+	}
+	sum := sha256.Sum256(ders[0])
+	if result.Fingerprint != hex.EncodeToString(sum[:]) {
+		t.Fatalf("leaf fingerprint changed: %q", result.Fingerprint)
+	}
+	if result.Serial != "abcdef" || strings.Join(result.Names, ",") != "long-chain.test" {
+		t.Fatalf("leaf changed: serial=%q names=%v", result.Serial, result.Names)
+	}
+	if !result.ChainHasIntermediate {
+		t.Fatal("expected an intermediate in the kept chain")
+	}
+	if !result.Trusted {
+		t.Fatalf("kept chain should still verify: %q", result.VerifyError)
+	}
+	if result.VerifyError != "chain truncated to 16 certificates" {
+		t.Fatalf("truncation not reported: %q", result.VerifyError)
+	}
+
+	untrusted, err := (&Prober{Clock: clock.Fixed{Time: testNow}, Timeout: 5 * time.Second}).Probe(context.Background(), host, port, "long-chain.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if untrusted.Trusted || !strings.Contains(untrusted.VerifyError, "x509:") || !strings.Contains(untrusted.VerifyError, "chain truncated to 16 certificates") {
+		t.Fatalf("verify detail lost the verdict or the truncation note: trusted=%v verifyError=%q", untrusted.Trusted, untrusted.VerifyError)
+	}
+
+	leaf.Certificate = ders[:maxChainCertificates]
+	exactHost, exactPort := serve(t, &tls.Config{Certificates: []tls.Certificate{leaf}})
+	exact, err := prober.Probe(context.Background(), exactHost, exactPort, "long-chain.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exact.Trusted || exact.VerifyError != "" {
+		t.Fatalf("a chain of exactly 16 must not be truncated: trusted=%v verifyError=%q", exact.Trusted, exact.VerifyError)
 	}
 }
 
