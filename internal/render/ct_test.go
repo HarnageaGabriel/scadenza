@@ -185,6 +185,66 @@ func TestCTDiagnosticMatchesPublishedSchema(t *testing.T) {
 	}
 }
 
+func TestCTTableAlignsDisplayColumns(t *testing.T) {
+	base := ct.Certificate{NotBefore: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), LifetimeDays: 90, Verdict100D: "ok", Source: "test"}
+	// One row per width class: ASCII, a decomposed accent (zero-width mark),
+	// CJK and emoji. The trailing columns carry the wide cells, so if they
+	// start at the same terminal column in every row, the whole row aligns.
+	issuers := []string{"Alpha", "Cafe\u0301", "中文", "🔥🔥"}
+	names := []string{"alpha.example", "cafe.example", "中文.example", "fire.example"}
+	fingerprints := []string{"fp-a", "fp-b", "fp-c", "fp-d"}
+	certificates := make([]ct.Certificate, 0, len(issuers))
+	for index := range issuers {
+		certificate := base
+		certificate.Fingerprint = fingerprints[index]
+		certificate.Serial = string(rune('1' + index))
+		certificate.Issuer = issuers[index]
+		certificate.SubjectNames = []string{names[index]}
+		certificates = append(certificates, certificate)
+	}
+	var output bytes.Buffer
+	if err := CT(&output, "table", CTDocument{Certificates: certificates}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n")
+	columns := [][]string{
+		append([]string{"ISSUER"}, issuers...),
+		append([]string{"NAMES"}, names...),
+		append([]string{"SOURCE"}, "test", "test", "test", "test"),
+	}
+	for column, values := range columns {
+		start := -1
+		for row, line := range lines {
+			index := strings.Index(line, values[row])
+			if index < 0 {
+				t.Fatalf("column %d missing %q in line %q", column, values[row], line)
+			}
+			width := displayWidth(line[:index])
+			if start == -1 {
+				start = width
+			}
+			if width != start {
+				t.Errorf("column %d starts at display column %d in row %d, want %d:\n%s", column, width, row, start, output.String())
+			}
+		}
+	}
+}
+
+func TestCTTableASCIIOutputUnchanged(t *testing.T) {
+	certificate := ct.Certificate{Fingerprint: strings.Repeat("a", 64), Serial: "1b", SubjectNames: []string{"api.example.com", "www.example.com"}, Issuer: "CN=Example CA", NotBefore: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), LifetimeDays: 90, Verdict100D: "ok", Source: "test"}
+	var output bytes.Buffer
+	if err := CT(&output, "table", CTDocument{Certificates: []ct.Certificate{certificate, certificate}}); err != nil {
+		t.Fatal(err)
+	}
+	const want = `NOT BEFORE  NOT AFTER   DAYS  100D  FINGERPRINT SHA256                                                SERIAL  REVOKED  ISSUER         NAMES                             SOURCE
+2026-01-01  2026-04-01  90    ok    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  1b      -        CN=Example CA  api.example.com, www.example.com  test
+2026-01-01  2026-04-01  90    ok    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  1b      -        CN=Example CA  api.example.com, www.example.com  test
+`
+	if output.String() != want {
+		t.Fatalf("ASCII table output changed:\ngot  %q\nwant %q", output.String(), want)
+	}
+}
+
 func TestCTTableStripsControlCharacters(t *testing.T) {
 	value := false
 	certificate := ct.Certificate{

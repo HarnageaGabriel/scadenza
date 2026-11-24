@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/HarnageaGabriel/scadenza/internal/diag"
@@ -136,7 +135,7 @@ func writeScanCSV(writer io.Writer, certificates []inventory.Certificate) error 
 }
 
 func writeScanTable(writer io.Writer, document ScanDocument, groupBy string) error {
-	certificates := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
+	certificates := newTableWriter(writer)
 	if _, err := fmt.Fprintln(certificates, "FINGERPRINT SHA256\tSERIAL\tDAYS\t100D\tMODE\tHEALTH\tPUBLIC\tOBSERVATIONS\tISSUER\tNAMES\tOWNERS"); err != nil {
 		return err
 	}
@@ -176,7 +175,7 @@ func writeScanTable(writer io.Writer, document ScanDocument, groupBy string) err
 }
 
 func writeFindings(writer io.Writer, findings []inventory.Finding) error {
-	output := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
+	output := newTableWriter(writer)
 	if _, err := fmt.Fprintln(output, "FINDINGS"); err != nil {
 		return err
 	}
@@ -199,7 +198,7 @@ func writeFindings(writer io.Writer, findings []inventory.Finding) error {
 // writeRisks prints the renewal risks as a summary at the end of the table. The
 // section is omitted when no certificate has a risk.
 func writeRisks(writer io.Writer, certificates []inventory.Certificate) error {
-	output := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
+	output := newTableWriter(writer)
 	rows := 0
 	for _, certificate := range certificates {
 		for _, risk := range certificate.Renewal.Risks {
